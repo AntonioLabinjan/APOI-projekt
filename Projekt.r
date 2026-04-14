@@ -25,6 +25,13 @@
 #' DATUM: Travanj, 2026.
 #' ==============================================================================
 
+#' ==============================================================================
+#' PROJEKT: Analiza utjecaja dobi na sportski uspjeh u MMA (UFC Case Study)
+#' KOLEGIJ: Analiza podataka i obrada informacija (APOI)
+#' AUTOR: Antonio Labinjan
+#' DATUM: Travanj, 2026.
+#' ==============================================================================
+
 # --- 1. FAZA: Učitavanje biblioteka ---
 library(tidyverse)
 library(broom)
@@ -34,31 +41,22 @@ library(caret)
 library(car)         
 library(pROC)        
 library(scales)      
+library(gridExtra)   # Za slaganje više grafova
 
 # Učitavanje podataka
 df <- read.csv("/home/antonio/Downloads/ufc-master.csv")
 
-# --- 2. FAZA: ETL Proces (Čišćenje i transformacija) ---
+# --- 2. FAZA: ETL Proces ---
 ufc_clean <- df %>%
-  # KLJUČNI POPRAVAK: "\\.+" zamjenjuje jednu ili VIŠE točaka s jednom donjom crticom
   rename_with(~ tolower(gsub("\\.+", "_", .x))) %>% 
   mutate(
-    # 1. Binarna varijabla ishoda
     is_winner = factor(ifelse(w == 1, "Win", "Loss"), levels = c("Loss", "Win")),
-    
-    # 2. Težinske kategorije (Light vs Heavy)
     weight_cat = factor(case_when(
       flyweight == 1 | bantamweight == 1 | featherweight == 1 | lightweight == 1 ~ "Light",
       TRUE ~ "Heavy"
     )),
-    
-    # 3. Binarna podjela po starosnoj granici
     age_group = factor(ifelse(age >= 35, "Over_35", "Under_35")),
-    
-    # 4. Numerička varijabla aktivnosti
     strikes = as.numeric(significant_strike_land),
-    
-    # 5. Klasifikacija metode završetka (Sada nazivi stupaca odgovaraju)
     method = case_when(
       ko_tko == 1 ~ "KO/TKO",
       submission == 1 ~ "Submission",
@@ -70,20 +68,61 @@ ufc_clean <- df %>%
   drop_na() %>%
   filter(age >= 18 & age <= 55)
 
-# --- 3. FAZA: Eksploracijska analiza (EDA) ---
+# --- 3. FAZA: Eksploracijska analiza (EDA) & Distribucije ---
 
+# 3.1. Deskriptivna statistika (Proširena)
+summary_stats <- ufc_clean %>% 
+  group_by(age_group) %>% 
+  summarise(
+    N = n(),
+    Mean_Age = mean(age),
+    SD_Age = sd(age),
+    Mean_Strikes = mean(strikes),
+    Median_Strikes = median(strikes),
+    IQR_Strikes = IQR(strikes)
+  )
 print("--- DESKRIPTIVNA STATISTIKA ---")
-print(ufc_clean %>% group_by(age_group) %>% 
-        summarise(N=n(), Mean_Age=mean(age), Mean_Strikes=mean(strikes)))
+print(summary_stats)
 
-# Vizualizacija 1: Vjerojatnost pobjede (Interakcija Dob x Kategorija)
+# 3.2. Vizualizacija distribucije i normalnosti (KLJUČNO ZA FAZU 3)
+# Histogram s gustoćom (Density) - provjera oblika distribucije dapića
+p1 <- ggplot(ufc_clean, aes(x = strikes)) +
+  geom_histogram(aes(y = ..density..), binwidth = 10, fill = "steelblue", alpha = 0.7) +
+  geom_density(color = "red", size = 1) +
+  labs(title = "Distribucija značajnih udaraca", x = "Broj udaraca", y = "Gustoća") +
+  theme_minimal()
+
+# Q-Q Plot - formalna vizualna provjera normalnosti
+p2 <- ggplot(ufc_clean, aes(sample = strikes)) +
+  stat_qq() + stat_qq_line(color = "red") +
+  labs(title = "Q-Q Plot: Normalnost udaraca") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+
+# 3.3. Box-plot za detekciju outlier-a (izdvojenica)
+# Ovo pokazuje razliku u varijabilitetu između mladih i starijih boraca
+ggplot(ufc_clean, aes(x = age_group, y = strikes, fill = age_group)) +
+  geom_boxplot(outlier.color = "red", outlier.shape = 16) +
+  labs(title = "Detekcija izdvojenica: Aktivnost po dobnim skupinama",
+       x = "Dobna skupina", y = "Značajni udarci") +
+  theme_minimal()
+
+# 3.4. Provjera normalnosti Shapiro-Wilk testom (na uzorku do 5000)
+shapiro_res <- shapiro.test(sample(ufc_clean$strikes, min(nrow(ufc_clean), 5000)))
+print("--- SHAPIRO-WILK TEST (p < 0.05 ukazuje na odstupanje od normalnosti) ---")
+print(shapiro_res)
+
+# --- 4. FAZA: Vizualizacija interakcija (Raniji grafikon) ---
+
 ggplot(ufc_clean, aes(x = age, y = as.numeric(is_winner == "Win"), color = weight_cat)) +
   geom_smooth(method = "glm", method.args = list(family = "binomial"), se = TRUE) +
   labs(title = "Pad vjerojatnosti pobjede: Light vs Heavyweight",
+       subtitle = "Stariji borci u lakšim kategorijama brže gube performanse",
        x = "Dob borca", y = "Vjerojatnost pobjede", color = "Kategorija") +
   theme_minimal()
 
-# --- 4. FAZA: ANALIZA NAČINA ZAVRŠETKA (Method of Victory) ---
+# --- 5. FAZA: Analiza načina završetka ---
 
 ufc_method_plot <- ufc_clean %>% 
   filter(method != "Other" & age <= 50)
@@ -93,13 +132,14 @@ ggplot(ufc_method_plot, aes(x = age, fill = method)) +
   scale_y_continuous(labels = scales::percent) +
   scale_fill_manual(values = c("KO/TKO" = "#E41A1C", "Submission" = "#377EB8", "Decision" = "#4DAF4A")) +
   labs(title = "Evolucija ishoda borbe kroz biološku dob",
-       subtitle = "Zelena površina (Decision) raste s godinama",
+       subtitle = "Zelena površina (Decision) raste s godinama - opadanje eksplozivnosti",
        x = "Dob borca", y = "Udio u ukupnom broju borbi (%)", fill = "Način pobjede") +
   theme_minimal() + theme(legend.position = "bottom")
 
-# --- 5. FAZA: Statističko testiranje hipoteza ---
+# --- 6. FAZA: Statističko testiranje hipoteza ---
 
 # H1: Razlika u aktivnosti (t-test)
+# NAPOMENA: Ako Shapiro-Wilk propadne (p < 0.05), razmisli o Wilcoxon testu
 print("--- T-TEST: AKTIVNOST ---")
 print(t.test(strikes ~ age_group, data = ufc_clean))
 
@@ -112,28 +152,30 @@ summary(glm_model)
 print("--- VIF (Multikolinearnost) ---")
 print(vif(glm_model))
 
-# --- 6. FAZA: Strojno učenje (Decision Tree) ---
+# --- 7. FAZA: Strojno učenje (Decision Tree) ---
 
 set.seed(123)
 train_control <- trainControl(method = "cv", number = 5)
 tree_cv <- train(is_winner ~ age + strikes + weight_cat, 
                  data = ufc_clean, method = "rpart", trControl = train_control)
 
-print("--- REZULTATI UNAKRSNE PROVJERE ---")
-print(tree_cv)
+# Vizualizacija stabla s postotcima
+rpart.plot(tree_cv$finalModel, 
+           main = "Decision Tree: Predviđanje pobjede", 
+           box.palette = "RdGn", 
+           extra = 104) # 104 dodaje postotak observacija u čvoru
 
-# Vizualizacija stabla
-rpart.plot(tree_cv$finalModel, main = "Decision Tree: Predviđanje pobjede", box.palette = "RdGn")
-
-# --- 7. FAZA: Evaluacija (ROC/AUC) ---
+# --- 8. FAZA: Evaluacija (ROC/AUC) ---
 
 probs <- predict(glm_model, type = "response")
 roc_curve <- roc(ufc_clean$is_winner, probs)
-plot(roc_curve, col = "blue", lwd = 3, main = paste("ROC (AUC =", round(auc(roc_curve), 3), ")"))
+plot(roc_curve, col = "blue", lwd = 3, main = paste("ROC Krivulja (AUC =", round(auc(roc_curve), 3), ")"))
+abline(a=0, b=1, lty=2, col="gray") # Dijagonala nasumičnog pogađanja
 
-# Odds Ratios
+# Odds Ratios (Tumačenje šansi)
 print("--- ODNOSI ŠANSI (Odds Ratios) ---")
 print(exp(coef(glm_model)))
+
 
 
 '''
