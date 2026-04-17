@@ -178,35 +178,31 @@ print(exp(coef(glm_model)))
 
 
 
-'''
-1. Predmet i cilj istraživanja
+---
 
-Istraživanje je fokusirano na analizu fenomena biološkog opadanja performansi kod profesionalnih MMA boraca (uzorak N>11.000). Primarni cilj bio je testirati hipotezu o "Age 35 Curse" – kritičnoj granici od 35 godina – te utvrditi postoji li korelacija između težinske kategorije i brzine opadanja vjerojatnosti pobjede.
-2. Statistička analiza i ključni nalazi ("The Signal")
+## Sažeta interpretacija projekta (APOI)
 
-Provedena analiza rezultirala je trima ključnim uvidima:
+### 1. Cilj i izvor podataka
+Istraživanje se bavi utjecajem kronološke dobi na sportsku uspješnost u MMA (UFC). Koriste se stvarni podaci s **Kaggle** platforme (*UFC-Master dataset*). Skup podataka predstavlja **uzorak** povijesnih borbi, analiziran pojmovno (ishod borbe i aktivnost), prostorno (globalna razina) i vremenski (zaključno s dostupnim ažuriranjima baze).
 
-    Welchov t-test: Potvrđena je statistički značajna razlika (p<0.01) u volumenu udaraca. Veterani (35+) pokazuju značajno manju aktivnost, što sugerira pad kardiovaskularnog kapaciteta i motoričke brzine.
+### 2. ETL proces i priprema
+Provedena je standardizacija naziva varijabli pomoću `tolower` i `gsub` funkcija. Ključni korak transformacije bio je kreiranje varijabli `weight_cat` (binarna podjela na lake i teške kategorije) i `is_winner` (faktor varijabla). Uklonjeni su nedostajući podaci (`drop_na`) kako bi se osigurala preciznost modela, uz fokus na borce u biološkom rasponu od 18 do 55 godina.
 
-    GLM Model (Logistička regresija): Model je izolirao negativan koeficijent dobi. Svaka dodatna godina života statistički smanjuje šanse za pobjedu.
+### 3. Eksploracijska analiza (EDA) i pretpostavke
+* **Deskriptivna statistika:** Analiza mjera središnje tendencije pokazala je da mlađi borci imaju viši medijan značajnih udaraca (**27**) u odnosu na starije (**25**).
+* **Normalnost:** Shapiro-Wilk test ($p < 2.2e-16$) i Q-Q plot jasno indiciraju **odstupanje od normalne distribucije** (desna asimetrija/skewness).
+* **Homogenost varijance:** Leveneov test ($p = 0.5163$) potvrdio je homogenost varijanci između dobnih skupina, što je metodološki bitno za daljnje testiranje.
 
-    Interakcijski efekt (Ključni dokaz): Najznačajniji nalaz je signifikantna interakcija dobi i težinske kategorije. Podaci potvrđuju da borci u lakšim kategorijama trpe znatno progresivniji pad performansi. Dok teškaši mogu kompenzirati gubitak brzine zadržavanjem snage (tzv. "power lasts last"), lakši borci – čiji uspjeh ovisi o refleksima i eksplozivnosti – postaju statistički ranjiviji čim prijeđu biološki vrhunac.
+### 4. Istraživačke hipoteze
+1.  **H1 (Razlika):** Postoji statistički značajna razlika u broju udaraca između mlađih i starijih boraca.
+2.  **H2 (Predviđanje):** Dob i težinska kategorija značajno utječu na vjerojatnost pobjede.
 
-3. Evaluacija modela i interpretacija šuma ("The Noise")
+### 5. Modeliranje i ključni rezultati
+* **Usporedba skupina:** Zbog nenormalnosti podataka, primijenjen je **Wilcoxon rank sum test** koji je potvrdio značajnu razliku u aktivnosti ($p = 0.00027$).
+* **GLM (Logistička regresija):** Model je pokazao da svaka dodatna godina života smanjuje šanse za pobjedu (Odds Ratio ≈ **0.96**), dok aktivnost (udarci) linearno povećava šanse (OR ≈ **1.02**). Potvrđena je interakcija dobi i kategorije ($p = 0.0014$), sugerirajući brži pad performansi kod lakših boraca.
+* **Klasifikacija (Stablo odlučenja):** Model je vizualno identificirao "prekretnicu" uspjeha na **38 udaraca**. Uz CP parametar od **0.002**, stablo je izoliralo specifične dobne granice (npr. 26, 28 i 36 godina) kao kritične točke za ishod borbe.
 
-Iako klasifikacijska točnost modela iznosi 59.5%, važno je naglasiti kontekst:
+### 6. Zaključak i validacija
+Model je validiran pomoću **ROC krivulje (AUC = 0.65)**, što ukazuje na solidnu diskriminacijsku moć u predviđanju pobjednika u kaotičnom sportskom okruženju. Rezultati podupiru teoriju o biološkom opadanju sportskih performansi, s posebnim naglaskom na važnost volumena udaraca kao kompenzacijskog faktora.
 
-    Stohastička priroda sporta: MMA je visokovarijabilan sustav gdje pojedinačni događaji (ozljeda, knockout, sudačka diskrecija) predstavljaju "statistički šum" koji nije moguće deterministički modelirati.
-
-    Signifikantnost iznad točnosti: Unatoč šumu, postignuta točnost je statistički značajno veća od razine slučajnosti (Acc>NIR,p<0.001). Model nije "kristalna kugla", već alat koji uspješno izolira biološki trend iz kaotičnih podataka.
-
-4. Metodološka robusnost
-
-Znanstvena utemeljenost rada osigurana je kroz:
-
-    Shapiro-Wilk test i Q-Q plotove za analizu distribucije reziduala.
-
-    VIF dijagnostiku kojom je potvrđena stabilnost modela unatoč interakcijskim članovima.
-
-    5-fold Cross-validation (unakrsnu provjeru), čime je dokazano da model posjeduje opću prediktivnu moć, a ne samo prilagođenost (overfitting) na specifičan uzorak.
-'''
+---
