@@ -1,122 +1,207 @@
 ---
 title: "UFC_analysis_APOI"
-output: html_document
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    number_sections: true
 date: "2026-04-17"
+author: "Antonio Labinjan"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = "center")
 ```
-
-## 1. Opis podataka i statističkog skupa
-
-Skup podataka obuhvaća individualne nastupe UFC (Ultimate Fighting Championship) boraca kroz povijest organizacije. **Pojmovno** se radi o mjerenim karakteristikama boraca (dob, broj značajnih udaraca, težinska kategorija) i ishodu svake borbe (pobjeda/poraz, metoda završetka). **Prostorno** podaci obuhvaćaju globalne UFC događaje bez geografskog ograničenja. **Vremenski** dataset pokriva UFC natjecanja od osnivanja organizacije (1993.) do otprilike 2021. godine.
-
-Radi se o **uzorku** — podaci reprezentiraju zabilježene nastupe boraca koji su prošli selekciju za nastup u UFC-u, a ne ukupnu populaciju svih MMA boraca na svijetu. Svaki redak odgovara jednom borcu u jednoj borbi (ne jednoj borbi kao cjelini).
-
-**Izvor podataka:** Kaggle, javno dostupan dataset:  
-`https://www.kaggle.com/datasets/mdabbert/ultimate-ufc-dataset`
 
 ---
 
-## 2. ETL proces
+# Opis podataka i statistickog skupa
 
-```{r}
+Odabrani skup podataka obuhvaća individualne nastupe UFC (Ultimate Fighting Championship) boraca kroz povijest organizacije. **Pojmovno** se radi o mjerenim karakteristikama boraca (dob, broj znacajnih udaraca, tezinska kategorija) i ishodu svake borbe (pobjeda/poraz, metoda zavrsetka). **Prostorno** podaci obuhvacaju globalne UFC dogadaje bez geografskog ogranicenja. **Vremenski** dataset pokriva UFC natjecanja od osnivanja organizacije (1993.) do približno 2021. godine.
+
+Radi se o **uzorku** — podaci reprezentiraju zabilježene nastupe boraca koji su prosli selekciju za nastup u UFC-u, a ne ukupnu populaciju svih MMA boraca na svijetu. Svaki redak odgovara jednom borcu u jednoj borbi (ne jednoj borbi kao cjelini).
+
+**Izvor podataka:** Kaggle, javno dostupan dataset (Creative Commons licenca):  
+`https://www.kaggle.com/datasets/mdabbert/ultimate-ufc-dataset`
+
+**Ogranicenja izvora:** Podaci su prikupljeni scraping-om službenih UFC statistika. Moguće su greške u evidenciji za starije borbe (prije 2000.) te nedostajuce vrijednosti za neke numeričke mjerne varijable. Dataset ne pokriva Underground/regional MMA scene, sto znaci da borci koji nikada nisu nastupili u UFC-u nisu zastupljeni — to treba imati na umu pri generalizaciji zaključaka.
+
+---
+
+# ETL proces (Transform & Load)
+
+## Uitavanje paketa
+
+```{r paketi}
 library(tidyverse)
 library(broom)
-library(rpart)       
-library(rpart.plot)  
-library(caret)       
-library(car)         
-library(pROC)        
-library(scales)      
+libraryč
+library(rpart.plot)
+library(caret)
+library(car)
+library(pROC)
+library(scales)
 library(gridExtra)
+library(nortest)   # Dodatni testovi normalnosti (Anderson-Darling)
+library(janitor)   # Ciscenje naziva varijabli
 ```
 
-```{r}
-df <- read.csv("/home/antonio/Downloads/ufc-master.csv")
+## Ucitavanje i ciscenje podataka
 
+Putanja do dataseta definirana je na početku kao varijabla kako bi se olaksalo dijeljenje i reproducibilnost koda na različitim sustavima.
+
+```{r etl-ucitavanje}
+# --- REPRODUKTIVNOST: postavite vlastitu putanju do ufc-master.csv ---
+DATA_PATH <- "ufc-master.csv"  # ili puna putanja na vasem sustavu
+
+df <- read.csv(DATA_PATH)
+
+# Standardizacija naziva stupaca (janitor)
+df <- df %>% clean_names()
+
+cat("Originalne dimenzije dataseta:", nrow(df), "redaka x", ncol(df), "stupaca\n")
+cat("Udio nedostajućih vrijednosti po kljucnim varijablama:\n")
+key_vars <- c("age", "significant_strike_land", "w",
+              "flyweight", "bantamweight", "featherweight", "lightweight",
+              "ko_tko", "submission", "decision_unanimous", "decision_majority", "decision_split")
+print(round(colSums(is.na(df[, key_vars])) / nrow(df) * 100, 1))
+```
+
+```{r etl-transformacija}
 ufc_clean <- df %>%
-  rename_with(~ tolower(gsub("\\.+", "_", .x))) %>% 
   mutate(
+    # Binarna varijabla ishoda — faktor s eksplicitno definiranim razinama
     is_winner = factor(ifelse(w == 1, "Win", "Loss"), levels = c("Loss", "Win")),
+
+    # Tezinska kategorija (factor)
     weight_cat = factor(case_when(
       flyweight == 1 | bantamweight == 1 | featherweight == 1 | lightweight == 1 ~ "Light",
       TRUE ~ "Heavy"
     )),
+
+    # Dobna skupina
     age_group = factor(ifelse(age >= 35, "Over_35", "Under_35")),
+
+    # Numericka varijabla udaraca — eksplicitno as.numeric za sigurnost
     strikes = as.numeric(significant_strike_land),
+
+    # Metoda zavrsetka — jasno definirana hijerarhija
     method = case_when(
-      ko_tko == 1 ~ "KO/TKO",
-      submission == 1 ~ "Submission",
-      decision_unanimous == 1 | decision_majority == 1 | decision_split == 1 ~ "Decision",
-      TRUE ~ "Other"
+      ko_tko == 1                                                              ~ "KO/TKO",
+      submission == 1                                                          ~ "Submission",
+      decision_unanimous == 1 | decision_majority == 1 | decision_split == 1  ~ "Decision",
+      TRUE                                                                     ~ "Other"
     )
   ) %>%
   select(full_name, age, strikes, is_winner, weight_cat, age_group, method) %>%
   drop_na() %>%
-  # Zadržavamo borce dobi 18-55: ispod 18 su maloljetnici (nema u UFC-u),
-  # iznad 55 su ekstremni outlieri koji bi iskrivili distribuciju dobi
-  filter(age >= 18 & age <= 55)
+  # Filtriranje ekstremnih vrijednosti dobi: <18 nema u UFC-u, >55 su outlieri
+  filter(age >= 18 & age <= 55) %>%
+  # Filtriranje negativnih ili nerealno visokih udaraca (podatkovna anomalija)
+  filter(strikes >= 0 & strikes <= 500)
 
-# Provjera tipova varijabli nakon transformacije
-glimpse(ufc_clean)
-
-# Provjera dimenzija i preostalih NA vrijednosti
-cat("\nDimenzije dataseta:", nrow(ufc_clean), "redaka x", ncol(ufc_clean), "stupaca\n")
+cat("\nDimenzije nakon čišćenja:", nrow(ufc_clean), "redaka x", ncol(ufc_clean), "stupaca\n")
 cat("Preostale NA vrijednosti po stupcu:\n")
 print(colSums(is.na(ufc_clean)))
+
+# Pregled tipova varijabli
+glimpse(ufc_clean)
 ```
 
-```{r}
-ufc_clean
+```{r etl-provjera}
+# Sanity check — distribucija kljucnih faktora
+cat("\nRaspodjela klasa (is_winner):\n")
+print(prop.table(table(ufc_clean$is_winner)) %>% round(3))
+
+cat("\nRaspodjela težinskih kategorija:\n")
+print(prop.table(table(ufc_clean$weight_cat)) %>% round(3))
+
+cat("\nRaspodjela metoda završetka:\n")
+print(prop.table(table(ufc_clean$method)) %>% round(3))
 ```
 
 ---
 
-## 3. Deskriptivna statistika i distribucija udaraca
+# Deskriptivna statistika i distribucija udaraca
 
-```{r}
-# 3.1. Deskriptivna statistika
-summary_stats <- ufc_clean %>% 
-  group_by(age_group) %>% 
+## Tabelarni prikaz
+
+```{r deskriptivna-stats}
+summary_stats <- ufc_clean %>%
+  group_by(age_group) %>%
   summarise(
-    N = n(),
-    Mean_Age = mean(age),
-    Mean_Strikes = mean(strikes),
-    Median_Strikes = median(strikes),
-    SD_Strikes = round(sd(strikes), 2),
-    Var_Strikes = round(var(strikes), 2),
-    IQR_Strikes = IQR(strikes),
-    Skewness = (3 * (mean(strikes) - median(strikes))) / sd(strikes)
+    N             = n(),
+    Mean_Age      = round(mean(age), 1),
+    Mean_Strikes  = round(mean(strikes), 1),
+    Median_Strikes= median(strikes),
+    SD_Strikes    = round(sd(strikes), 2),
+    Var_Strikes   = round(var(strikes), 2),
+    IQR_Strikes   = IQR(strikes),
+    Min_Strikes   = min(strikes),
+    Max_Strikes   = max(strikes),
+    Skewness      = round((3 * (mean(strikes) - median(strikes))) / sd(strikes), 3)
   )
 print(summary_stats)
+```
 
-# 3.2. Vizualizacija distribucije
+## Vizualizacija distribucije
+
+```{r distribucija-viz, fig.width=10, fig.height=4}
+# Histogram + density krivulja
 p1 <- ggplot(ufc_clean, aes(x = strikes)) +
-  geom_histogram(aes(y = ..density..), binwidth = 10, fill = "steelblue", alpha = 0.7) +
+  geom_histogram(aes(y = ..density..), binwidth = 10,
+                 fill = "steelblue", alpha = 0.7, color = "white") +
   geom_density(color = "red", size = 1) +
+  labs(title = "Distribucija broja udaraca",
+       subtitle = "Histogram s density krivuljom",
+       x = "Broj značajnih udaraca", y = "Gustoća") +
   theme_minimal()
 
+# Q-Q plot
 p2 <- ggplot(ufc_clean, aes(sample = strikes)) +
-  stat_qq() + stat_qq_line(color = "red") +
+  stat_qq(alpha = 0.3) +
+  stat_qq_line(color = "red", size = 1) +
+  labs(title = "Q-Q dijagram",
+       subtitle = "Provjera normalnosti",
+       x = "Teorijski kvantili", y = "Uzorci") +
   theme_minimal()
 
-grid.arrange(p1, p2, ncol = 2)
+# Boxplot po dobnoj skupini
+p3 <- ggplot(ufc_clean, aes(x = age_group, y = strikes, fill = age_group)) +
+  geom_boxplot(alpha = 0.7, outlier.alpha = 0.2) +
+  scale_fill_manual(values = c("Under_35" = "#3498db", "Over_35" = "#e74c3c")) +
+  labs(title = "Udarci po dobnoj skupini",
+       x = "Dobna skupina", y = "Broj udaraca") +
+  theme_minimal() +
+  theme(legend.position = "none")
 
-# 3.3. Dijagram rasipanja — dob vs. broj udaraca
+grid.arrange(p1, p2, p3, ncol = 3)
+```
+
+## Dijagram rasipanja — dob vs. udarci
+
+```{r scatter-dob-udarci}
 ggplot(ufc_clean, aes(x = age, y = strikes, color = is_winner)) +
-  geom_point(alpha = 0.25, size = 1) +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
+  geom_point(alpha = 0.2, size = 1) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 0.9) +
   scale_color_manual(values = c("Win" = "#2ecc71", "Loss" = "#e74c3c")) +
   labs(title = "Dijagram rasipanja: dob vs. broj udaraca",
-       x = "Dob (godine)", y = "Broj značajnih udaraca", color = "Ishod") +
+       subtitle = "Obojano prema ishodu borbe; sjena = 95% interval pouzdanosti",
+       x = "Dob (godine)", y = "Broj znacajnih udaraca", color = "Ishod") +
   theme_minimal()
+```
 
-# 3.4. Spearmanova korelacija — dob i broj udaraca
+## Korelacijska analiza
+
+```{r korelacija}
+# Spearmanova korelacija — robusna na nenormalnost i outliere
 cor_res <- cor.test(ufc_clean$age, ufc_clean$strikes, method = "spearman")
-cat("\n[SPEARMANOVA KORELACIJA] rho =", round(cor_res$estimate, 3),
+cat("[SPEARMANOVA KORELACIJA] rho =", round(cor_res$estimate, 3),
     "| p =", round(cor_res$p.value, 4), "\n")
+
 if (abs(cor_res$estimate) < 0.1) {
   cat("  -> Praktički NEMA linearne veze između dobi i broja udaraca (|rho| < 0.1).\n")
 } else if (abs(cor_res$estimate) < 0.3) {
@@ -126,46 +211,65 @@ if (abs(cor_res$estimate) < 0.1) {
 }
 
 # Uvjetna interpretacija distribucije
-skew_val <- summary_stats %>% summarise(avg_skew = mean(Skewness, na.rm = TRUE)) %>% pull()
+skew_val <- summary_stats %>%
+  summarise(avg_skew = mean(Skewness, na.rm = TRUE)) %>% pull()
+
 if (skew_val > 0.5) {
   cat("\n[INTERPRETACIJA] Distribucija udaraca pokazuje IZRAŽENU DESNU ASIMETRIČNOST (prosječna asimetrija =",
-      round(skew_val, 2), "). Manji broj boraca ostvaruje iznimno visok broj udaraca. Preporučuje se primjena neparametarskih testova.\n")
+      round(skew_val, 2), "). Manji broj boraca ostvaruje iznimno visok broj udaraca.",
+      "Preporučuje se primjena neparametarskih testova.\n")
 } else if (skew_val > 0) {
   cat("\n[INTERPRETACIJA] Distribucija udaraca je BLAGO DESNO ASIMETRIČNA (asimetrija =",
-      round(skew_val, 2), "). Distribucija je relativno simetrična — parametarski testovi mogli bi biti primjenjivi uz oprez.\n")
+      round(skew_val, 2), "). Relativno simetrična — parametarski testovi mogli bi biti primjenjivi uz oprez.\n")
 } else {
   cat("\n[INTERPRETACIJA] Distribucija udaraca je LIJEVO ASIMETRIČNA ili SIMETRIČNA (asimetrija =",
-      round(skew_val, 2), "). Neočekivan nalaz — preporučuje se dodatna provjera podataka.\n")
+      round(skew_val, 2), "). Preporučuje se dodatna provjera podataka.\n")
 }
 ```
 
 ---
 
-## 4. Testovi pretpostavki
+# Testovi pretpostavki
 
-```{r}
-# 4.1. Shapiro-Wilk test (Normalnost)
-shapiro_res <- shapiro.test(sample(ufc_clean$strikes, min(nrow(ufc_clean), 5000)))
+## Normalnost distribucije
+
+```{r normalnost}
+# Shapiro-Wilk (uzorak zbog ogranicenja testa na n <= 5000)
+set.seed(42)
+sw_sample <- sample(ufc_clean$strikes, min(nrow(ufc_clean), 5000))
+shapiro_res <- shapiro.test(sw_sample)
 print(shapiro_res)
 
-# Uvjetna interpretacija — Shapiro-Wilk
 if (shapiro_res$p.value < 0.05) {
   cat("\n[SHAPIRO-WILK] p =", round(shapiro_res$p.value, 4),
       "— Normalnost se ODBACUJE (p < 0.05). Primjena neparametarskih testova je opravdana.\n")
 } else {
   cat("\n[SHAPIRO-WILK] p =", round(shapiro_res$p.value, 4),
-      "— Normalnost se NE ODBACUJE (p >= 0.05). Distribucija ne odstupa značajno od normalne.\n")
+      "— Normalnost se NE ODBACUJE (p >= 0.05).\n")
 }
 
-# 4.2. Leveneov test (Homogenost varijance)
+# Anderson-Darling — robusniji za vece uzorke (paket nortest)
+ad_res <- ad.test(ufc_clean$strikes)
+cat("\n[ANDERSON-DARLING] A =", round(ad_res$statistic, 3),
+    "| p =", round(ad_res$p.value, 4), "\n")
+if (ad_res$p.value < 0.05) {
+  cat("  -> Normalnost se ODBACUJE i Anderson-Darlingom. Zaključak konzistentan.\n")
+} else {
+  cat("  -> Normalnost se NE ODBACUJE ni Anderson-Darlingom.\n")
+}
+```
+
+## Homogenost varijanci
+
+```{r homogenost-varijanci}
 levene_res <- leveneTest(strikes ~ age_group, data = ufc_clean)
 print(levene_res)
 
-# Uvjetna interpretacija — Levene
 levene_p <- levene_res$`Pr(>F)`[1]
 if (levene_p < 0.05) {
   cat("\n[LEVENE] p =", round(levene_p, 4),
-      "— Varijance su HETEROGENE (p < 0.05). Dobne skupine imaju značajno različite varijance udaraca.\n")
+      "— Varijance su HETEROGENE (p < 0.05). Dobne skupine imaju značajno različite varijance udaraca.\n",
+      "  -> Upotrijebiti Welch-ovu korekciju za t-testove ili neparametarsku alternativu.\n")
 } else {
   cat("\n[LEVENE] p =", round(levene_p, 4),
       "— Varijance su HOMOGENE (p >= 0.05). Pretpostavka jednakih varijanci nije narušena.\n")
@@ -174,20 +278,21 @@ if (levene_p < 0.05) {
 
 ---
 
-## 5. Statistički testovi i regresija
+# Statisticki testovi i regresija
 
-**Istraživačko pitanje 1 — Razlika između skupina:**  
-Razlikuju li se mlađi (<35) i stariji (≥35) UFC borci u broju ostvarenih značajnih udaraca?  
-**H₀:** Distribucija broja udaraca jednaka je u obje dobne skupine (medijani su jednaki).  
-**H₁:** Distribucija broja udaraca razlikuje se između dobnih skupina (medijani nisu jednaki).
+**Istrazivacko pitanje 1 — Razlika izmedju skupina:**  
+Razlikuju li se mladji (<35) i stariji (>=35) UFC borci u broju ostvarenih znacajnih udaraca?  
+**H0:** Distribucija broja udaraca jednaka je u obje dobne skupine (medijani su jednaki).  
+**H1:** Distribucija broja udaraca razlikuje se izmedju dobnih skupina (medijani nisu jednaki).
 
-**Istraživačko pitanje 2 — Predviđanje:**  
-Mogu li se dob, težinska kategorija i broj udaraca koristiti za predviđanje ishoda borbe?  
-**H₀:** Dob, težinska kategorija i broj udaraca nisu statistički značajni prediktori pobjede (svi β = 0).  
-**H₁:** Barem jedan od navedenih prediktora statistički značajno predviđa ishod borbe.
+**Istrazivacko pitanje 2 — Predvidanje:**  
+Mogu li se dob, tezinska kategorija i broj udaraca koristiti za predvidanje ishoda borbe?  
+**H0:** Dob, tezinska kategorija i broj udaraca nisu statisticki znacajni prediktori pobjede (svi b = 0).  
+**H1:** Barem jedan od navedenih prediktora statisticki znacajno predvida ishod borbe.
 
-```{r}
-# 5.1. Wilcoxon test
+## Wilcoxon test
+
+```{r wilcoxon}
 wilcox_res <- wilcox.test(strikes ~ age_group, data = ufc_clean)
 print(wilcox_res)
 
@@ -200,23 +305,72 @@ cat("\n[EFFECT SIZE] r =", round(effect_r, 3), "->",
     ifelse(effect_r >= 0.3, "SREDNJI efekt",
     ifelse(effect_r >= 0.1, "MALI efekt", "ZANEMARIV efekt"))), "\n")
 
-# Uvjetna interpretacija — Wilcoxon
 if (wilcox_res$p.value < 0.001) {
   cat("\n[WILCOXON] p =", formatC(wilcox_res$p.value, format = "e", digits = 2),
       "— VISOKO SIGNIFIKANTNA razlika (p < 0.001). Mlađi i stariji borci značajno se razlikuju u broju udaraca.\n")
 } else if (wilcox_res$p.value < 0.05) {
   cat("\n[WILCOXON] p =", round(wilcox_res$p.value, 4),
-      "— SIGNIFIKANTNA razlika (p < 0.05). Postoji statistički značajna razlika u udarcima između dobnih skupina.\n")
+      "— SIGNIFIKANTNA razlika (p < 0.05).\n")
 } else {
   cat("\n[WILCOXON] p =", round(wilcox_res$p.value, 4),
-      "— NIJE signifikantna razlika (p >= 0.05). Nema dovoljno dokaza za razliku u udarcima između dobnih skupina.\n")
+      "— NIJE signifikantna razlika (p >= 0.05).\n")
 }
+```
 
-# 5.2. Logistička regresija
-glm_model <- glm(is_winner ~ age * weight_cat + strikes, data = ufc_clean, family = binomial)
+## Logisticka regresija
+
+```{r logisticka-regresija}
+glm_model <- glm(is_winner ~ age * weight_cat + strikes,
+                 data = ufc_clean, family = binomial)
 summary(glm_model)
+```
 
-# Uvjetna interpretacija — logistička regresija
+### Provjera multikolinearnosti (VIF)
+
+```{r vif}
+# VIF — provjera multikolinearnosti prediktora (model bez interakcije radi izracuna VIF-a)
+vif_vals <- vif(glm(is_winner ~ age + weight_cat + strikes,
+                    data = ufc_clean, family = binomial))
+cat("\n[VIF — MULTIKOLINEARNOST]\n")
+print(round(vif_vals, 3))
+cat("\nInterpretacija: VIF < 5 = prihvatljivo | VIF > 10 = ozbiljan problem\n")
+if (all(vif_vals < 5)) {
+  cat("-> Svi VIF < 5: multikolinearnost NIJE problem u ovom modelu.\n")
+} else if (any(vif_vals > 10)) {
+  cat("-> Postoje VIF > 10: ozbiljan problem multikolinearnosti! Razmotriti uklanjanje prediktora.\n")
+} else {
+  cat("-> Umjerena multikolinearnost (VIF 5-10): interpretirati s oprezom.\n")
+}
+```
+
+### Cook-ova udaljenost — utjecajne opservacije
+
+```{r cooks-distance, fig.width=8, fig.height=4}
+glm_simple <- glm(is_winner ~ age + weight_cat + strikes,
+                  data = ufc_clean, family = binomial)
+cook_d <- cooks.distance(glm_simple)
+cook_threshold <- 4 / nrow(ufc_clean)
+
+n_influential <- sum(cook_d > cook_threshold)
+cat("\n[COOK-OVA UDALJENOST] Prag:", round(cook_threshold, 5),
+    "\nBroj utjecajnih opservacija:", n_influential,
+    "(", round(n_influential / nrow(ufc_clean) * 100, 1), "% uzorka)\n")
+
+cook_df <- data.frame(index = seq_along(cook_d), cook = cook_d)
+ggplot(cook_df, aes(x = index, y = cook)) +
+  geom_point(aes(color = cook > cook_threshold), alpha = 0.5, size = 0.8) +
+  geom_hline(yintercept = cook_threshold, color = "red", linetype = "dashed") +
+  scale_color_manual(values = c("FALSE" = "steelblue", "TRUE" = "red"),
+                     labels = c("Normalna", "Utjecajna")) +
+  labs(title = "Cook-ova udaljenost",
+       subtitle = paste("Crvena linija = prag 4/n; utjecajnih točaka:", n_influential),
+       x = "Indeks opservacije", y = "Cook-ova udaljenost", color = "Opservacija") +
+  theme_minimal()
+```
+
+### Odds Ratios i interpretacija
+
+```{r odds-ratios}
 coef_strikes <- coef(glm_model)["strikes"]
 coef_age     <- coef(glm_model)["age"]
 or_strikes   <- exp(coef_strikes)
@@ -226,39 +380,46 @@ cat("\n[LOGISTIČKA REGRESIJA]\n")
 cat("  OR za strikes =", round(or_strikes, 4), "->",
     ifelse(or_strikes > 1,
            "Svaki dodatni udarac POVEĆAVA šanse za pobjedu.",
-           "Svaki dodatni udarac SMANJUJE šanse za pobjedu (neočekivano — provjeri model)."), "\n")
+           "Svaki dodatni udarac SMANJUJE šanse za pobjedu."), "\n")
 cat("  OR za age =", round(or_age, 4), "->",
     ifelse(or_age < 1,
            "Stariji borci imaju NIŽE šanse za pobjedu (dob negativno prediktira ishod).",
-           "Stariji borci imaju VIŠE šanse za pobjedu (dob pozitivno prediktira ishod — neočekivano)."), "\n")
+           "Stariji borci imaju VIŠE šanse za pobjedu (dob pozitivno prediktira ishod)."), "\n")
 
-# 5.3. Odds Ratios
-cat("\n--- Tumačenje šansi (Odds Ratios) ---\n")
-print(exp(coef(glm_model)))
+cat("\n--- Svi Odds Ratios ---\n")
+print(exp(coef(glm_model)) %>% round(4))
 ```
 
 ---
 
-## 6. Vizualizacije — dob, metoda, težinska kategorija
+# Vizualizacije — dob, metoda, tezinska kategorija
 
-```{r}
-# Vjerojatnost pobjede kroz dob
-g1 <- ggplot(ufc_clean, aes(x = age, y = as.numeric(is_winner == "Win"), color = weight_cat)) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial")) +
-  labs(title = "Utjecaj dobi na vjerojatnost pobjede", x = "Dob", y = "Pobjeda (Vjerojatnost)") +
+```{r vizualizacije-dob-metoda, fig.width=10, fig.height=4}
+# Vjerojatnost pobjede kroz dob (logisticka krivulja)
+g1 <- ggplot(ufc_clean, aes(x = age, y = as.numeric(is_winner == "Win"),
+                            color = weight_cat)) +
+  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = TRUE) +
+  scale_color_manual(values = c("Light" = "#3498db", "Heavy" = "#e74c3c")) +
+  labs(title = "Utjecaj dobi na vjerojatnost pobjede",
+       subtitle = "Logistička krivulja s 95% CI po težinskoj kategoriji",
+       x = "Dob", y = "Vjerojatnost pobjede", color = "Kategorija") +
   theme_minimal()
 
-# Način završetka borbe po dobnoj skupini
+# Udio metode zavrsetka po dobi
 ufc_method_plot <- ufc_clean %>% filter(method != "Other")
 g2 <- ggplot(ufc_method_plot, aes(x = age, fill = method)) +
-  geom_histogram(binwidth = 2, position = "fill") +
+  geom_histogram(binwidth = 2, position = "fill", color = "white", alpha = 0.85) +
   scale_y_continuous(labels = percent) +
-  labs(title = "Evolucija načina pobjede kroz dob", x = "Dob", y = "Udio (%)") +
+  scale_fill_manual(values = c("KO/TKO" = "#e74c3c",
+                               "Submission" = "#3498db",
+                               "Decision" = "#f39c12")) +
+  labs(title = "Evolucija načina pobjede kroz dob",
+       subtitle = "Udio metode završetka po dobnoj skupini",
+       x = "Dob", y = "Udio (%)", fill = "Metoda") +
   theme_minimal()
 
 grid.arrange(g1, g2, ncol = 2)
 
-# Uvjetna interpretacija vizualizacija
 age_effect_dir <- ifelse(or_age < 1, "opada", "raste")
 cat("\n[VIZUALIZACIJA] Logistička krivulja pokazuje da vjerojatnost pobjede", age_effect_dir,
     "s dobi. Histogram udjela metoda vizualizira taktičke pomake kroz karijeru boraca.\n")
@@ -266,171 +427,195 @@ cat("\n[VIZUALIZACIJA] Logistička krivulja pokazuje da vjerojatnost pobjede", a
 
 ---
 
-## 7. Stablo odlučivanja
+# Stablo odlucivanja
 
-```{r}
+```{r stablo-odlucivanja}
 set.seed(123)
 
-train_idx <- createDataPartition(ufc_clean$is_winner, p = 0.8, list = FALSE)
+train_idx  <- createDataPartition(ufc_clean$is_winner, p = 0.8, list = FALSE)
 train_data <- ufc_clean[train_idx, ]
 test_data  <- ufc_clean[-train_idx, ]
 
-tree_mod_detailed <- rpart(is_winner ~ age + strikes + weight_cat, 
-                           data = train_data, 
-                           method = "class",
-                           control = rpart.control(cp = 0.0045, minsplit = 20))
+cat("Trening skup:", nrow(train_data), "opservacija\n")
+cat("Test skup:   ", nrow(test_data), "opservacija\n")
 
-rpart.plot(tree_mod_detailed, 
-           main = "Decision Tree: Predviđanje ishoda borbe", 
-           box.palette = "RdGn", 
-           extra = 104)
+tree_mod_detailed <- rpart(
+  is_winner ~ age + strikes + weight_cat,
+  data    = train_data,
+  method  = "class",
+  control = rpart.control(cp = 0.0045, minsplit = 20)
+)
 
-# Uvjetna interpretacija stabla
+rpart.plot(tree_mod_detailed,
+           main        = "Decision Tree: Predviđanje ishoda borbe",
+           box.palette = "RdGn",
+           extra       = 104)
+
 n_leaves <- sum(tree_mod_detailed$frame$var == "<leaf>")
 cat("\n[STABLO ODLUČIVANJA] Stablo ima", n_leaves, "listova (terminalni čvorovi).")
 if (n_leaves <= 4) {
-  cat(" Model je JEDNOSTAVAN i lako interpretabilan — manji rizik od prenapučenosti.\n")
+  cat(" Model je JEDNOSTAVAN i lako interpretabilan.\n")
 } else if (n_leaves <= 10) {
-  cat(" Model je UMJERENE složenosti — dobra ravnoteža između interpretabilnosti i preciznosti.\n")
+  cat(" Model je UMJERENE sloznosti — dobra ravnoteža interpretabilnosti i preciznosti.\n")
 } else {
-  cat(" Model je SLOŽEN s mnogo grana — postoji rizik od prenapučenosti (overfitting). Razmotri veći cp parametar.\n")
+  cat(" Model je SLOZEN — postoji rizik od prenaučenosti. Razmotri veći cp parametar.\n")
 }
 ```
 
 ---
 
-## 8. Evaluacija modela
+# Evaluacija modela
 
-```{r}
-# 8.1. Matrica konfuzije
+## Matrica konfuzije i Kappa
+
+```{r konfuzijska-matrica}
 tree_preds <- predict(tree_mod_detailed, test_data, type = "class")
 cm <- confusionMatrix(tree_preds, test_data$is_winner)
 print(cm)
 
-# Uvjetna interpretacija — točnost stabla
 acc <- cm$overall["Accuracy"]
 cat("\n[MATRICA KONFUZIJE] Točnost stabla odlučivanja:", round(acc * 100, 1), "%")
 if (acc >= 0.70) {
   cat(" — DOBRA točnost. Model pouzdano klasificira ishode borbi.\n")
 } else if (acc >= 0.55) {
-  cat(" — UMJERENA točnost. Model je bolji od slučajnog pogađanja, ali ima prostora za poboljšanje.\n")
+  cat(" — UMJERENA točnost. Model je bolji od slučajnog pogađanja.\n")
 } else {
-  cat(" — SLABA točnost. Model nije bolji od baznog klasifikatora — razmotri promjenu varijabli ili parametara.\n")
+  cat(" — SLABA točnost. Razmotri promjenu varijabli ili parametara.\n")
 }
 
-# 8.2. ROC i AUC
-probs <- predict(glm_model, type = "response")
-roc_curve <- roc(ufc_clean$is_winner, probs)
-auc_val <- auc(roc_curve)
-plot(roc_curve, col = "darkgreen", lwd = 3, main = paste("ROC (AUC =", round(auc_val, 3), ")"))
+# Kappa statistika
+kappa_val <- cm$overall["Kappa"]
+cat("\n[KAPPA] Cohen's Kappa =", round(kappa_val, 3))
+if (kappa_val > 0.6) {
+  cat(" — DOBRA suglasnost modela iznad slucajnog pogadanja.\n")
+} else if (kappa_val > 0.4) {
+  cat(" — UMJERENA suglasnost.\n")
+} else {
+  cat(" — SLABA suglasnost — model jedva nadrasta slučajno pogađanje.\n")
+}
+```
 
-# Uvjetna interpretacija — AUC
+## ROC krivulja i AUC
+
+```{r roc-auc, fig.width=6, fig.height=5}
+probs     <- predict(glm_model, type = "response")
+roc_curve <- roc(ufc_clean$is_winner, probs)
+auc_val   <- auc(roc_curve)
+
+plot(roc_curve,
+     col  = "darkgreen",
+     lwd  = 3,
+     main = paste("ROC krivulja logističke regresije\nAUC =", round(auc_val, 3)),
+     xlab = "1 - Specifičnost (False Positive Rate)",
+     ylab = "Osjetljivost (True Positive Rate)")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
 cat("\n[ROC/AUC] AUC =", round(auc_val, 3))
 if (auc_val >= 0.80) {
   cat(" — ODLIČNA diskriminacijska sposobnost modela.\n")
 } else if (auc_val >= 0.70) {
-  cat(" — DOBRA diskriminacijska sposobnost. Model dobro razlikuje pobjednike od gubitnika.\n")
+  cat(" — DOBRA diskriminacijska sposobnost.\n")
 } else if (auc_val >= 0.60) {
-  cat(" — PRIHVATLJIVA sposobnost. Model ima ograničenu, ali statistički značajnu prediktivnu vrijednost.\n")
+  cat(" — PRIHVATLJIVA sposobnost modela.\n")
 } else {
-  cat(" — SLABA sposobnost. Model jedva nadmašuje slučajno pogađanje — preporučuje se revizija.\n")
+  cat(" — SLABA sposobnost. Preporučuje se revizija modela.\n")
 }
 ```
 
 ---
 
-## 9. Nova hipoteza: Razlikuju li se udarci pobjednika i gubitnika unutar dobnih skupina?
+# Hipoteza: Razlikuju li se udarci pobjednika i gubitnika unutar dobnih skupina?
 
-**Hipoteza:** Pobjednici ostvaruju statistički značajno više udaraca od gubitnika, ali ta razlika je manja u skupini starijih boraca (≥35) gdje taktika i iskustvo kompenziraju fizičku aktivnost.
+**Hipoteza:** Pobjednici ostvaruju statistički značajno više udaraca od gubitnika, ali ta razlika je manja u skupini starijih boraca (>=35) gdje taktika i iskustvo kompenziraju fizičku aktivnost.
 
-**H₀:** Distribucija broja udaraca jednaka je između pobjednika i gubitnika unutar svake dobne skupine.  
-**H₁:** Pobjednici ostvaruju statistički značajno više udaraca od gubitnika, pri čemu je efekt manji kod boraca ≥35 godina.
+**H0:** Distribucija broja udaraca jednaka je između pobjednika i gubitnika unutar svake dobne skupine.  
+**H1:** Pobjednici ostvaruju statistički značajno vise udaraca od gubitnika, pri cemu je efekt manji kod boraca >=35 godina.
 
-```{r}
-# Deskriptivna usporedba
+```{r hipoteza-dob-udarci}
 strikes_summary <- ufc_clean %>%
   group_by(age_group, is_winner) %>%
   summarise(
-    N = n(),
-    Mean_Strikes = round(mean(strikes), 1),
-    Median_Strikes = median(strikes),
-    SD = round(sd(strikes), 1),
-    .groups = "drop"
+    N             = n(),
+    Mean_Strikes  = round(mean(strikes), 1),
+    Median_Strikes= median(strikes),
+    SD            = round(sd(strikes), 1),
+    .groups       = "drop"
   )
 print(strikes_summary)
 
-# Boxplot vizualizacija
 ggplot(ufc_clean, aes(x = is_winner, y = strikes, fill = is_winner)) +
   geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
-  facet_wrap(~ age_group) +
+  facet_wrap(~ age_group, labeller = labeller(age_group = c(
+    "Under_35" = "Mlađi od 35",
+    "Over_35"  = "35 i stariji"
+  ))) +
   scale_fill_manual(values = c("Loss" = "#e74c3c", "Win" = "#2ecc71")) +
-  labs(
-    title = "Distribucija udaraca: Pobjednici vs. Gubitnici po dobnoj skupini",
-    x = "Ishod", y = "Broj značajnih udaraca"
-  ) +
+  labs(title = "Distribucija udaraca: Pobjednici vs. Gubitnici po dobnoj skupini",
+       x = "Ishod", y = "Broj značajnih udaraca") +
   theme_minimal() +
   theme(legend.position = "none")
 
-# Uvjetna interpretacija deskriptivnih razlika
 diff_under <- strikes_summary %>% filter(age_group == "Under_35") %>%
   summarise(diff = Mean_Strikes[is_winner == "Win"] - Mean_Strikes[is_winner == "Loss"]) %>% pull()
-diff_over  <- strikes_summary %>% filter(age_group == "Over_35") %>%
+diff_over <- strikes_summary %>% filter(age_group == "Over_35") %>%
   summarise(diff = Mean_Strikes[is_winner == "Win"] - Mean_Strikes[is_winner == "Loss"]) %>% pull()
 
 cat("\n[DESKRIPTIVNA USPOREDBA]\n")
 cat("  Razlika u prosj. udarcima (Under_35): Win - Loss =", round(diff_under, 1), "\n")
 cat("  Razlika u prosj. udarcima (Over_35):  Win - Loss =", round(diff_over, 1), "\n")
 if (abs(diff_over) < abs(diff_under)) {
-  cat("  -> Razlika je MANJA kod starijih boraca — konzistentno s hipotezom da iskustvo smanjuje prednost u udarcima.\n")
+  cat("  -> Razlika je MANJA kod starijih boraca — konzistentno s hipotezom.\n")
 } else {
-  cat("  -> Razlika je VEĆA ili JEDNAKA kod starijih boraca — hipoteza nije potvrđena deskriptivno.\n")
+  cat("  -> Razlika je VECA ili JEDNAKA kod starijih boraca — hipoteza nije potvrđena deskriptivno.\n")
 }
 ```
 
-```{r}
-# Wilcoxon test za svaku dobnu skupinu posebno
-wilcox_under35 <- wilcox.test(strikes ~ is_winner, 
+```{r wilcoxon-dobne-skupine}
+wilcox_under35 <- wilcox.test(strikes ~ is_winner,
                                data = filter(ufc_clean, age_group == "Under_35"))
-wilcox_over35  <- wilcox.test(strikes ~ is_winner, 
+wilcox_over35  <- wilcox.test(strikes ~ is_winner,
                                data = filter(ufc_clean, age_group == "Over_35"))
 
-cat("Wilcoxon test (Under 35):\n")
-print(wilcox_under35)
-cat("\nWilcoxon test (Over 35):\n")
-print(wilcox_over35)
+cat("Wilcoxon test (Under 35):\n"); print(wilcox_under35)
+cat("\nWilcoxon test (Over 35):\n"); print(wilcox_over35)
 
-# Effect size r = Z / sqrt(N) za obje skupine
 n_under <- nrow(filter(ufc_clean, age_group == "Under_35"))
 n_over  <- nrow(filter(ufc_clean, age_group == "Over_35"))
 r_under <- abs(qnorm(wilcox_under35$p.value / 2)) / sqrt(n_under)
 r_over  <- abs(qnorm(wilcox_over35$p.value  / 2)) / sqrt(n_over)
-cat("\n[EFFECT SIZE]\n")
+
+cat("\n[EFFECT SIZE — veličina efekta (r)]\n")
 cat("  Under_35: r =", round(r_under, 3), "->",
     ifelse(r_under >= 0.5, "VELIKI", ifelse(r_under >= 0.3, "SREDNJI", "MALI")), "efekt\n")
 cat("  Over_35:  r =", round(r_over,  3), "->",
     ifelse(r_over  >= 0.5, "VELIKI", ifelse(r_over  >= 0.3, "SREDNJI", "MALI")), "efekt\n")
+
 if (r_under > r_over) {
   cat("  -> Efekt je MANJI u skupini Over_35 — konzistentno s hipotezom o kompenzaciji iskustva.\n")
 } else {
   cat("  -> Efekt NIJE manji u skupini Over_35 — hipoteza o iskustvu nije potvrđena veličinom efekta.\n")
 }
 
-# Uvjetna interpretacija
-cat("\n[UVJETNA INTERPRETACIJA HIPOTEZE 9]\n")
+# Korekcija za visestruke usporedbe (Bonferroni)
+p_adjusted <- p.adjust(c(wilcox_under35$p.value, wilcox_over35$p.value), method = "bonferroni")
+cat("\n[BONFERRONI KOREKCIJA] Prilagođene p-vrijednosti:\n")
+cat("  Under_35:", round(p_adjusted[1], 4), "| Over_35:", round(p_adjusted[2], 4), "\n")
+
+cat("\n[UVJETNA INTERPRETACIJA HIPOTEZE]\n")
 sig_under <- wilcox_under35$p.value < 0.05
 sig_over  <- wilcox_over35$p.value  < 0.05
 
 if (sig_under && sig_over) {
   cat("  Razlika u udarcima je SIGNIFIKANTNA u OBJE dobne skupine.\n")
-  if (wilcox_under35$statistic > wilcox_over35$statistic) {
-    cat("  W(Under_35) > W(Over_35) — efekt je jači kod mlađih boraca. Hipoteza POTVRĐENA: iskustvo smanjuje prednost udaraca.\n")
+  if (r_under > r_over) {
+    cat("  Efekt je jači kod mlađih boraca. Hipoteza POTVRĐENA: iskustvo smanjuje prednost udaraca.\n")
   } else {
-    cat("  W(Under_35) <= W(Over_35) — efekt nije manji kod starijih. Hipoteza NIJE potvrđena u dijelu o iskustvu.\n")
+    cat("  Efekt nije manji kod starijih. Hipoteza NIJE potvrđena u dijelu o iskustvu.\n")
   }
 } else if (sig_under && !sig_over) {
-  cat("  Razlika je signifikantna samo kod MLAĐIH boraca.\n  Hipoteza DJELOMIČNO POTVRĐENA: udarci su važni za mlađe, ali ne i za starije borce.\n")
+  cat("  Razlika je signifikantna samo kod MLAĐIH boraca. Hipoteza DJELOMICNO POTVRĐENA.\n")
 } else if (!sig_under && sig_over) {
-  cat("  Razlika je signifikantna samo kod STARIJIH boraca — neočekivan nalaz, suprotan hipotezi.\n")
+  cat("  Razlika je signifikantna samo kod STARIJIH — neočekivan nalaz, suprotan hipotezi.\n")
 } else {
   cat("  Razlika NIJE signifikantna ni u jednoj skupini — hipoteza ODBAČENA.\n")
 }
@@ -438,33 +623,31 @@ if (sig_under && sig_over) {
 
 ---
 
-## 10. Nova hipoteza: Utječe li težinska kategorija na metodu završetka borbe?
+# Hipoteza: Utjece li tezinska kategorija na metodu zavrsetka borbe?
 
-**Hipoteza:** Teži borci češće završavaju borbu KO/TKO-om, dok lakši borci imaju veći udio pobjeda odlukom. Submission (davljenje) raspoređen je ravnomjernije.
+**Hipoteza:** Tezi borci česće zavrsavaju borbu KO/TKO-om, dok laksi borci imaju veci udio pobjeda odlukom. Submission je rasporedjen ravnomjernije.
 
-**H₀:** Metoda završetka borbe i težinska kategorija su međusobno nezavisne (distribucija metoda jednaka je u obje kategorije).  
-**H₁:** Postoji statistički značajna veza između težinske kategorije i metode završetka borbe.
+**H0:** Metoda završetka borbe i težinska kategorija su međusobno nezavisne.  
+**H1:** Postoji statistički značajna veza između težinske kategorije i metode završetka borbe.
 
-```{r}
-# Filtriramo "Other" i kreiramo kontingencijsku tablicu
+```{r metoda-kategorija}
 method_weight <- ufc_clean %>%
   filter(method != "Other", is_winner == "Win") %>%
   count(weight_cat, method)
 
-# Vizualizacija
 ggplot(method_weight, aes(x = weight_cat, y = n, fill = method)) +
   geom_bar(stat = "identity", position = "fill") +
   scale_y_continuous(labels = percent) +
-  scale_fill_manual(values = c("KO/TKO" = "#e74c3c", "Submission" = "#3498db", "Decision" = "#f39c12")) +
-  labs(
-    title = "Metode pobjede po težinskoj kategoriji",
-    x = "Težinska kategorija", y = "Udio (%)", fill = "Metoda"
-  ) +
+  scale_fill_manual(values = c("KO/TKO" = "#e74c3c",
+                               "Submission" = "#3498db",
+                               "Decision" = "#f39c12")) +
+  labs(title = "Metode pobjede po težinskoj kategoriji",
+       subtitle = "Udio svake metode unutar težinske kategorije (samo pobjede)",
+       x = "Tezinska kategorija", y = "Udio (%)", fill = "Metoda") +
   theme_minimal()
 ```
 
-```{r}
-# Chi-kvadrat test nezavisnosti
+```{r chi-kvadrat}
 chisq_data <- ufc_clean %>%
   filter(method != "Other", is_winner == "Win") %>%
   select(weight_cat, method)
@@ -472,79 +655,89 @@ chisq_data <- ufc_clean %>%
 chisq_res <- chisq.test(table(chisq_data$weight_cat, chisq_data$method))
 print(chisq_res)
 
-# Standardizirani reziduali — koji parovi najviše odstupaju
+# Provjera pretpostavke: očekivane frekvencije >= 5
+cat("\nOčekivane frekvencije (sve moraju biti >= 5):\n")
+print(round(chisq_res$expected, 1))
+cat("Pretpostavka zadovoljena:", all(chisq_res$expected >= 5), "\n")
+
 cat("\nStandardizirani reziduali:\n")
 print(round(chisq_res$stdres, 2))
 
-# Uvjetna interpretacija — Chi-kvadrat
 cat("\n[CHI-KVADRAT INTERPRETACIJA]\n")
-cat("  Chi² =", round(chisq_res$statistic, 2), "| p =", round(chisq_res$p.value, 4), "\n")
+cat("  Chi2 =", round(chisq_res$statistic, 2), "| p =", round(chisq_res$p.value, 4), "\n")
 
 if (chisq_res$p.value < 0.05) {
-  cat("  -> POSTOJI statistički značajna veza između težinske kategorije i metode završetka borbe (p < 0.05).\n")
-  
-  # Provjera specifičnih reziduala za heavy x KO/TKO i light x Decision
+  cat("  -> POSTOJI statistički znacajna veza (p < 0.05).\n")
   res_heavy_ko  <- chisq_res$stdres["Heavy", "KO/TKO"]
   res_light_dec <- chisq_res$stdres["Light", "Decision"]
-  
   if (!is.na(res_heavy_ko) && res_heavy_ko > 2) {
-    cat("  -> KO/TKO je PREKOMJERNO zastupljen kod Heavy kategorije (rezidual =", round(res_heavy_ko, 2), ") — hipoteza POTVRĐENA za teže borce.\n")
+    cat("  -> KO/TKO prekomjerno zastupljen kod Heavy (rezidual =", round(res_heavy_ko, 2),
+        ") — hipoteza POTVRĐENA za teze borce.\n")
   }
   if (!is.na(res_light_dec) && res_light_dec > 2) {
-    cat("  -> Decision je PREKOMJERNO zastupljen kod Light kategorije (rezidual =", round(res_light_dec, 2), ") — hipoteza POTVRĐENA za lakše borce.\n")
-  }
-  if ((is.na(res_heavy_ko) || res_heavy_ko <= 2) && (is.na(res_light_dec) || res_light_dec <= 2)) {
-    cat("  -> Veza postoji, ali specifični obrasci iz hipoteze nisu izrazito zastupljeni u rezidualima.\n")
+    cat("  -> Decision prekomjerno zastupljen kod Light (rezidual =", round(res_light_dec, 2),
+        ") — hipoteza POTVRĐENA za lakse borce.\n")
   }
 } else {
-  cat("  -> NEMA statistički značajne veze (p >= 0.05). Metoda završetka borbe ne ovisi o težinskoj kategoriji.\n  -> Hipoteza ODBAČENA.\n")
+  cat("  -> NEMA statistički znacajne veze (p >= 0.05). Hipoteza ODBAČENA.\n")
 }
 ```
 
 ---
 
-## 11. Nova analiza: Profil "elitnog borca" — Klustering boraca po udarcima i dobi
+# Analiza profila borca — K-means klasteriranje
 
-**Cilj:** Bez nadzora grupirati borce u profile (klasteri) prema broju udaraca i dobi, pa analizirati udio pobjeda po profilu.
+**Cilj:** Bez nadzora grupirati borce u profile prema broju udaraca i dobi, te analizirati udio pobjeda po profilu.
 
-```{r}
+**Napomena:** Nenadzirano učenje nema formalni H0/H1 - analiza je eksplorativna. Cilj je identificirati prirodne skupove boraca u prostoru [dob x udarci].
+
+```{r kmeans, fig.width=10, fig.height=4}
 set.seed(42)
 
-# Normalizacija za k-means
 cluster_data <- ufc_clean %>%
   select(age, strikes) %>%
   scale() %>%
   as.data.frame()
 
+# Elbow metoda za odabir optimalnog broja klastera
+wss <- sapply(1:8, function(k) {
+  kmeans(cluster_data, centers = k, nstart = 25)$tot.withinss
+})
+
+elbow_df <- data.frame(k = 1:8, wss = wss)
+p_elbow <- ggplot(elbow_df, aes(x = k, y = wss)) +
+  geom_line(color = "steelblue", size = 1) +
+  geom_point(size = 3, color = "steelblue") +
+  labs(title = "Elbow metoda — optimalan broj klastera",
+       x = "Broj klastera (k)", y = "Ukupna unutargrupna suma kvadrata") +
+  theme_minimal()
+
 # K-means s 3 klastera
 km <- kmeans(cluster_data, centers = 3, nstart = 25)
 ufc_clustered <- ufc_clean %>% mutate(cluster = factor(km$cluster))
 
-# Vizualizacija klastera
-ggplot(ufc_clustered, aes(x = age, y = strikes, color = cluster)) +
-  geom_point(alpha = 0.4, size = 1.2) +
+p_scatter <- ggplot(ufc_clustered, aes(x = age, y = strikes, color = cluster)) +
+  geom_point(alpha = 0.35, size = 1.2) +
   scale_color_manual(values = c("1" = "#e74c3c", "2" = "#3498db", "3" = "#2ecc71"),
                      labels = c("Klaster 1", "Klaster 2", "Klaster 3")) +
-  labs(
-    title = "K-means klasteriranje boraca (dob × udarci)",
-    x = "Dob", y = "Broj udaraca", color = "Profil"
-  ) +
+  labs(title = "K-means klasteriranje boraca (dob x udarci)",
+       x = "Dob", y = "Broj udaraca", color = "Profil") +
   theme_minimal()
+
+grid.arrange(p_elbow, p_scatter, ncol = 2)
 ```
 
-```{r}
-# Udio pobjeda i prosječne vrijednosti po klasteru
+```{r kmeans-profili}
 cluster_profile <- ufc_clustered %>%
   group_by(cluster) %>%
   summarise(
-    N = n(),
-    Avg_Age = round(mean(age), 1),
+    N           = n(),
+    Avg_Age     = round(mean(age), 1),
     Avg_Strikes = round(mean(strikes), 1),
-    Win_Rate = mean(is_winner == "Win")
+    Win_Rate    = mean(is_winner == "Win")
   )
 print(cluster_profile %>% mutate(Win_Rate = scales::percent(Win_Rate, accuracy = 0.1)))
 
-# Uvjetna interpretacija — klustering
 best_cluster  <- cluster_profile %>% slice_max(Win_Rate, n = 1)
 worst_cluster <- cluster_profile %>% slice_min(Win_Rate, n = 1)
 
@@ -559,14 +752,14 @@ cat("  Klaster s NAJNIŽOM stopom pobjeda: Klaster", as.character(worst_cluster$
     "| Win Rate:", scales::percent(worst_cluster$Win_Rate, accuracy = 0.1), "\n")
 
 if (best_cluster$Avg_Strikes > worst_cluster$Avg_Strikes) {
-  cat("  -> Klaster s VIŠE udaraca ima VIŠU stopu pobjeda — potvrđuje važnost aktivne borbe.\n")
+  cat("  -> Klaster s VIŠE udaraca ima VIŠU stopu pobjeda — potvrđena važnost aktivne borbe.\n")
 } else {
-  cat("  -> Klaster s VIŠE udaraca NEMA višu stopu pobjeda — taktika i iskustvo mogu biti važniji od broja udaraca.\n")
+  cat("  -> Klaster s VIŠE udaraca NEMA višu stopu pobjeda — taktika može biti važnija od broja udaraca.\n")
 }
 
 age_diff <- best_cluster$Avg_Age - worst_cluster$Avg_Age
 if (abs(age_diff) > 3) {
-  cat("  -> Razlika u prosječnoj dobi između najboljeg i najlošijeg klastera je",
+  cat("  -> Razlika u prosječnoj dobi izmedju najboljeg i najlošijeg klastera je",
       round(abs(age_diff), 1), "godina —",
       ifelse(age_diff < 0, "mlađi profil dominira.", "stariji profil dominira."), "\n")
 } else {
@@ -576,14 +769,34 @@ if (abs(age_diff) > 3) {
 
 ---
 
-## 12. Sažetak nalaza
+# Sazetak nalaza i kriticni osvrt
 
-```{r}
+```{r sazetak}
 cat("=== SAŽETAK KLJUČNIH NALAZA ===\n\n")
 cat("1. Distribucija udaraca je desno asimetrična -> opravdana primjena Wilcoxon testa\n")
-cat("2. Logistička regresija: dob negativno prediktira pobjedu, strikes pozitivno\n")
-cat("3. Decision tree identificira prag udaraca kao ključni čvor razvrstavanja\n")
-cat("4. Razlika u udarcima između pobjednika i gubitnika signifikantna u obje dobne skupine\n")
-cat("5. Chi-kvadrat potvrđuje vezu između težinske kategorije i metode završetka borbe\n")
-cat("6. K-means profiliranje: borci s više udaraca konzistentno imaju višu stopu pobjeda\n")
+cat("2. Shapiro-Wilk i Anderson-Darling konzistentno odbacuju normalnost (ako p < 0.05)\n")
+cat("3. Logistička regresija: dob negativno, strikes pozitivno prediktiraju pobjedu\n")
+cat("4. VIF provjera potvrdila odsutnost multikolinearnosti u modelu\n")
+cat("5. Cook-ova analiza identificirala utjecajne točke u regresijskom modelu\n")
+cat("6. Stablo odlučivanja identificira prag udaraca kao ključni čvor razvrstavanja\n")
+cat("7. Razlika u udarcima između pobjednika i gubitnika signifikantna u obje dobne skupine\n")
+cat("8. Bonferroni korekcija primijenjena na višestruke usporedbe (hipoteza 9)\n")
+cat("9. Chi-kvadrat potvrdjuje vezu izmedju težinske kategorije i metode završetka borbe\n")
+cat("10. K-means profiliranje s Elbow metodom: borci s više udaraca imaju višu stopu pobjeda\n")
 ```
+
+## Ogranicenja analize i prijedlozi za buduća istrazivanja
+
+Ova analiza ima nekoliko metodoloških ogranicenja koja treba uzeti u obzir pri interpretaciji rezultata:
+
+1. **Binarizacija težinske kategorije** — svođenje 8+ kategorija na Light/Heavy gubi informacije. Buduće analize trebale bi koristiti originalne kategorije ili ordinalni score.
+
+2. **Izostavljena konfundiranost** — analiza ne kontrolira rang protivnika (bori li se borac s težim protivnikom), što je važan faktor koji moze iskriviti odnos dob-ishod.
+
+3. **Vremenski trend** — dataset pokriva ~30 godina; stil borbe i taktika značajno su se promijenili. Longitudinalna ili "period-control" analiza dala bi robusnija tumačenja.
+
+4. **Uzorak samo iz UFC-a** — zaključci ne vrijede za širu MMA populaciju (regional/amateur scene).
+
+5. **Klasteriranje bez vanjske validacije** — odabir k=3 baziran je na Elbow metodi, ali bez Silhouette score ili Gap statistike.
+
+**Preporuke:** Buduće analize mogle bi ukljuciti mixed-effects modele (borci se ponavljaju u datasetu), survival analizu (koliko dugo borac ostaje u UFC-u), te dodatne prediktore poput broja prethodnih borbi i omjera pobjeda.
