@@ -38,7 +38,6 @@ Radi se o **uzorku** — podaci reprezentiraju zabilježene nastupe boraca koji 
 ```{r paketi}
 library(tidyverse)
 library(broom)
-libraryč
 library(rpart.plot)
 library(caret)
 library(car)
