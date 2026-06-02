@@ -53,8 +53,7 @@ library(janitor)   # Ciscenje naziva varijabli
 Putanja do dataseta definirana je na početku kao varijabla kako bi se olaksalo dijeljenje i reproducibilnost koda na različitim sustavima.
 
 ```{r etl-ucitavanje}
-# --- REPRODUKTIVNOST: postavite vlastitu putanju do ufc-master.csv ---
-DATA_PATH <- "ufc-master.csv"  # ili puna putanja na vasem sustavu
+DATA_PATH <- "ufc-master.csv"  
 
 df <- read.csv(DATA_PATH)
 
@@ -72,7 +71,7 @@ print(round(colSums(is.na(df[, key_vars])) / nrow(df) * 100, 1))
 ```{r etl-transformacija}
 ufc_clean <- df %>%
   mutate(
-    # Binarna varijabla ishoda — faktor s eksplicitno definiranim razinama
+    # Binarna varijabla ishoda - faktor s eksplicitno definiranim razinama
     is_winner = factor(ifelse(w == 1, "Win", "Loss"), levels = c("Loss", "Win")),
 
     # Tezinska kategorija (factor)
@@ -87,7 +86,7 @@ ufc_clean <- df %>%
     # Numericka varijabla udaraca — eksplicitno as.numeric za sigurnost
     strikes = as.numeric(significant_strike_land),
 
-    # Metoda zavrsetka — jasno definirana hijerarhija
+    # Metoda zavrsetka - jasno definirana hijerarhija
     method = case_when(
       ko_tko == 1                                                              ~ "KO/TKO",
       submission == 1                                                          ~ "Submission",
@@ -145,7 +144,11 @@ summary_stats <- ufc_clean %>%
   )
 print(summary_stats)
 ```
+Volumen i aktivnost: Borci mlađi od 35 godina u prosjeku zadaju veći broj udaraca ($\bar{X} = 34.4$) u odnosu na stariju skupinu ($\bar{X} = 32.1$), što upućuje na viši tempo borbe kod mlađih boraca.
 
+Distribucija i asimetrija: Kod obje skupine primjetna je snažna pozitivna asimetrija distribucije, budući da je medijan (25 i 27) znatno niži od aritmetičke sredine. To ukazuje na činjenicu da većina mečeva završava s relativno malim brojem udaraca (npr. brzi prekidi, što potvrđuje i $Min = 0$), dok manji broj dugotrajnih mečeva s ekstremno visokim brojem udaraca značajno pomiče prosjek prema gore.
+
+Varijabilnost: Unatoč razlikama u prosjeku i znatno većem uzorku mlađih boraca ($N = 10.531$ naspram $N = 1.387$), mjere raspršenja poput standardne devijacije ($SD = 29.9$) i interkvartilnog raspona ($IQR = 37$) identične su za obje skupine, što pokazuje konzistentnu varijabilnost u gustoći zadanih udaraca bez obzira na životnu dob boraca. No, važno je uočiti da mlađi ipak pogađaju nešto više udaraca, pošto u UFC kontekstu ta 2 udarca razlike mogu činiti ključnu razliku
 ## Vizualizacija distribucije
 
 ```{r distribucija-viz, fig.width=10, fig.height=4}
@@ -203,7 +206,7 @@ Godine borca uopće ne utječu na to koliko će on udaraca zadati u meču – i 
 ## Korelacijska analiza
 
 ```{r korelacija}
-# Spearmanova korelacija — robusna na nenormalnost i outliere
+# Spearmanova korelacija - robusna na nenormalnost i outliere
 cor_res <- cor.test(ufc_clean$age, ufc_clean$strikes, method = "spearman")
 cat("[SPEARMANOVA KORELACIJA] rho =", round(cor_res$estimate, 3),
     "| p =", round(cor_res$p.value, 4), "\n")
@@ -289,12 +292,12 @@ Leveneov test daje $p = 0.5163$, što je znatno veće od $0.05$, čime se ne odb
 
 # Statisticki testovi i regresija
 
-**Istrazivacko pitanje 1 — Razlika izmedju skupina:**  
+**Istrazivacko pitanje 1 - Razlika izmedju skupina:**  
 Razlikuju li se mladji (<35) i stariji (>=35) UFC borci u broju ostvarenih znacajnih udaraca?  
 **H0:** Distribucija broja udaraca jednaka je u obje dobne skupine (medijani su jednaki).  
 **H1:** Distribucija broja udaraca razlikuje se izmedju dobnih skupina (medijani nisu jednaki).
 
-**Istrazivacko pitanje 2 — Predvidanje:**  
+**Istrazivacko pitanje 2 - Predvidanje:**  
 Mogu li se dob, tezinska kategorija i broj udaraca koristiti za predvidanje ishoda borbe?  
 **H0:** Dob, tezinska kategorija i broj udaraca nisu statisticki znacajni prediktori pobjede (svi b = 0).  
 **H1:** Barem jedan od navedenih prediktora statisticki znacajno predvida ishod borbe.
@@ -490,9 +493,9 @@ cat("\n[STABLO ODLUČIVANJA] Stablo ima", n_leaves, "listova (terminalni čvorov
 if (n_leaves <= 4) {
   cat(" Model je JEDNOSTAVAN i lako interpretabilan.\n")
 } else if (n_leaves <= 10) {
-  cat(" Model je UMJERENE sloznosti — dobra ravnoteža interpretabilnosti i preciznosti.\n")
+  cat(" Model je UMJERENE sloznosti - dobra ravnoteža interpretabilnosti i preciznosti.\n")
 } else {
-  cat(" Model je SLOZEN — postoji rizik od prenaučenosti. Razmotri veći cp parametar.\n")
+  cat(" Model je SLOZEN - postoji rizik od prenaučenosti. Razmotri veći cp parametar.\n")
 }
 ```
 Što se vidi: Stablo se dijeli samo na jednom mjestu, i to oko varijable strikes. Dob i težinska kategorija uopće nisu ušle u igru jer ih je algoritam odbacio kao manje važne.
@@ -518,15 +521,19 @@ print(cm)
 acc <- cm$overall["Accuracy"]
 cat("\n[MATRICA KONFUZIJE] Točnost stabla odlučivanja:", round(acc * 100, 1), "%")
 if (acc >= 0.70) {
-  cat(" — DOBRA točnost. Model pouzdano klasificira ishode borbi.\n")
+  cat(" - DOBRA točnost. Model pouzdano klasificira ishode borbi.\n")
 } else if (acc >= 0.55) {
-  cat(" — UMJERENA točnost. Model je bolji od slučajnog pogađanja.\n")
+  cat(" - UMJERENA točnost. Model je bolji od slučajnog pogađanja.\n")
 } else {
-  cat(" — SLABA točnost. Razmotri promjenu varijabli ili parametara.\n")
+  cat(" - SLABA točnost. Razmotri promjenu varijabli ili parametara.\n")
 }
 
 ```
-Model ima 59% accuracy što je zapravo zadovoljavajuće, ukoliko uzmemo u obzir široku lepezu raznih nepredvidivih faktora koji utječu na ishode borbe (npr. lucky punch)
+Iako se točnost od 58.96% u klasičnoj statistici može činiti niskom, u kontekstu predviđanja UFC ishoda ona zapravo predstavlja izvrsnu prediktivnu moć. UFC je sport s ekstremno visokom razinom nepredvidivosti gdje faktori poput sretnog udarca, iznenadnih ozljeda ili taktičkih prekida u sekundi rješavaju meč, pa je ovaj rezultat značajno bolji od čistog nagađanja koje iznosi 50.48%. Ekstremno niska p-vrijednost to i znanstveno potvrđuje te dokazuje da model ima stvarnu moć predviđanja, a ne da pogađa ishode pukom srećom.
+
+Zanimljivo je kako model zapravo donosi odluke kada se dublje pogleda matrica zabune. Pokazalo se da model ima visoku osjetljivost od 71.99%, što znači da izuzetno dobro prepoznaje borce koji će izgubiti meč jer su poodmakla dob i nizak volumen udaraca statistički vrlo pouzdani indikatori poraza. S druge strane, specifičnost je niža i iznosi 45.68% jer model teže točno detektira pobjednike i često borca koji je na kraju slavio pogrešno proglasi gubitnikom. To je sasvim logično za mješovite borilačke vještine jer borac može gubiti veći dio meča i statistički izgledati loše, a onda u zadnjoj minuti jednim potezom izvući nokaut ili polugu.
+
+Na kraju, ovaj model uspješno dokazuje da bazične varijable poput dobi i volumena udaraca kontroliraju oko 60% ishoda unutar UFC-a. Preostalih 40% predstavlja onaj čisti borilački kaos, taktiku i nepredvidivost koji se jednostavno ne mogu pretvoriti u matematičku formulu.
 ## ROC krivulja i AUC
 
 ```{r roc-auc, fig.width=6, fig.height=5}
@@ -610,7 +617,7 @@ Kod mlađih boraca pobjednici imaju u prosjeku 13.6 udaraca više od gubitnika, 
 
 # Hipoteza: Utjece li tezinska kategorija na metodu zavrsetka borbe?
 
-**Hipoteza:** Tezi borci česće zavrsavaju borbu KO/TKO-om, dok laksi borci imaju veci udio pobjeda odlukom. Submission je rasporedjen ravnomjernije.
+**Hipoteza:** Tezi borci česće zavrsavaju borbu KO/TKO-om, dok lakši borci imaju veci udio pobjeda odlukom. Submission je raspoređen ravnomjernije.
 
 **H0:** Metoda završetka borbe i težinska kategorija su međusobno nezavisne.  
 **H1:** Postoji statistički značajna veza između težinske kategorije i metode završetka borbe.
@@ -668,7 +675,7 @@ if (chisq_res$p.value < 0.05) {
   cat("  -> NEMA statistički znacajne veze (p >= 0.05). Hipoteza ODBAČENA.\n")
 }
 ```
-Hi-kvadrat test je i matematički potvrdio da težinska kategorija itekako utječe na način pobjede ($X^2 = 104.3$, $p < 0.05$).Standardizirani reziduali potpuno potvrđuju našu hipotezu:Teškaši statistički značajno odskaču po broju nokauta (rezidual $9.75$).Lakšaši prekomjerno često pobjeđuju na sudačke odluke (rezidual $8.66$).Parter (Submission) je oko nule, što znači da gušenja i poluge u obje kategorije završavaju točno onako kako statistička šansa i predviđa, bez obzira na kilažu.
+Hi-kvadrat test je i matematički potvrdio da težinska kategorija itekako utječe na način pobjede ($X^2 = 104.3$, $p < 0.05$).Standardizirani reziduali potpuno potvrđuju našu hipotezu:Teškaši statistički značajno odskaču po broju nokauta (rezidual $9.75$).Lakši prekomjerno često pobjeđuju na sudačke odluke (rezidual $8.66$).Parter (Submission) je oko nule, što znači da gušenja i poluge u obje kategorije završavaju točno onako kako statistička šansa i predviđa, bez obzira na kilažu.
 ---
 
 # Analiza profila borca — K-means klasteriranje
@@ -766,10 +773,10 @@ Zaključak: Klasteriranje potvrđuje da kombinacija mladosti i ekstremnog volume
 
 ---
 
-# Sazetak nalaza i kriticni osvrt
+# Sažetak
 
 ```{r sazetak}
-cat("=== SAŽETAK KLJUČNIH NALAZA ===\n\n")
+
 cat("1. Distribucija udaraca je desno asimetrična -> opravdana primjena Wilcoxon testa\n")
 cat("2. Shapiro-Wilk i Anderson-Darling konzistentno odbacuju normalnost (ako p < 0.05)\n")
 cat("3. Logistička regresija: dob negativno, strikes pozitivno prediktiraju pobjedu\n")
@@ -784,7 +791,7 @@ cat("10. K-means profiliranje s Elbow metodom: borci s više udaraca imaju višu
 
 ## Ogranicenja analize i prijedlozi za buduća istrazivanja
 
-Ova analiza ima nekoliko metodoloških ogranicenja koja treba uzeti u obzir pri interpretaciji rezultata:
+Ova analiza ima nekoliko metodoloških ograničenja koja treba uzeti u obzir pri interpretaciji rezultata:
 
 1. **Binarizacija težinske kategorije** — svođenje 8+ kategorija na Light/Heavy gubi informacije. Buduće analize trebale bi koristiti originalne kategorije ili ordinalni score.
 
