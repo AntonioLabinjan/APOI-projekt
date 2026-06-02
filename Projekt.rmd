@@ -33,7 +33,7 @@ Radi se o **uzorku** — podaci reprezentiraju zabilježene nastupe boraca koji 
 
 # ETL proces (Transform & Load)
 
-## Uitavanje paketa
+## Ucitavanje paketa
 
 ```{r paketi}
 library(tidyverse)
@@ -180,6 +180,12 @@ p3 <- ggplot(ufc_clean, aes(x = age_group, y = strikes, fill = age_group)) +
 grid.arrange(p1, p2, p3, ncol = 3)
 ```
 
+Prvi grafikon prikazuje izrazitu desnu asimetričnost, što znači da golema većina UFC borbi završi s relativno malim brojem udaraca, uglavnom između 0 i 50. Mečevi koji odu u teški brawling s preko 100 udaraca statistički su izuzetci i rijetke iznimke u podatcima.
+
+Drugi grafikon(Q-Q dijagram) jasno pokazuje veliko odstupanje točaka od crvene linije na desnom repu, što je neoboriv dokaz da podaci nisu normalno distribuirani. Upravo zbog tog kršenja normalnosti standardni t-test bi bio metodološka pogreška, pa smo kao ispravnu i robusnu alternativu odabrali neparametarski Wilcoxon test.
+
+Treći grafikon(Boxplotovi) pokazuje da obje dobne skupine u prosjeku imaju podjednak broj udaraca, što znači da taktika drži stabilan prosjek bez obzira na godine borca. Međutim, skupina mlađih od 35 godina bilježi znatno više ekstremnih outliera, što dokazuje da su nadprosječni mečevi s bolesno visokim brojem udaraca rezervirani gotovo isključivo za mlađe borce s većim kardio kapacitetom.
+
 ## Dijagram rasipanja — dob vs. udarci
 
 ```{r scatter-dob-udarci}
@@ -192,7 +198,8 @@ ggplot(ufc_clean, aes(x = age, y = strikes, color = is_winner)) +
        x = "Dob (godine)", y = "Broj znacajnih udaraca", color = "Ishod") +
   theme_minimal()
 ```
-
+Regresijske linije pokazuju da ne postoji značajna linearna povezanost između dobi borca i broja ostvarenih udaraca (korelacija je blizu nule). Međutim, vertikalni razmak između linija jasno ukazuje na postojanje glavnog efekta varijable is_winner.
+Godine borca uopće ne utječu na to koliko će on udaraca zadati u meču – i mlađi i stariji borci drže sličan ritam. Ono što graf zapravo brutalno jasno pokazuje jest da pobjednici (zelena linija) u svakoj životnoj dobi konzistentno zadaju više udaraca od gubitnika (crvena linija). 
 ## Korelacijska analiza
 
 ```{r korelacija}
@@ -225,7 +232,9 @@ if (skew_val > 0.5) {
       round(skew_val, 2), "). Preporučuje se dodatna provjera podataka.\n")
 }
 ```
+1. Spearmanova korelacija Koeficijent korelacije ($\rho = 0.003, p = 0.7516$) potvrđuje da ne postoji statistički značajna veza između dobi borca i broja udaraca. Budući da je $p > 0.05$, starenje boraca uopće ne utječe na promjenu volumena zadanih udaraca u meču.
 
+2. Asimetrija distribucije Vrijednost asimetrije od $0.73$ dokazuje izraženu desnu asimetričnost podataka, što znači da tek manji broj boraca ostvaruje ekstremno visok broj udaraca. Ovo jako odstupanje od simetrije konačni je metodološki dokaz da je primjena neparametarskih testova u radu bila nužna.
 ---
 
 # Testovi pretpostavki
@@ -257,6 +266,7 @@ if (ad_res$p.value < 0.05) {
   cat("  -> Normalnost se NE ODBACUJE ni Anderson-Darlingom.\n")
 }
 ```
+Oba testa (Shapiro-Wilk: $W = 0.866, p < 0.001$; Anderson-Darling: $A = 326.059, p < 0.001$) daju $p$-vrijednosti manje od $0.05$, čime se strogo odbacuje pretpostavka o normalnosti distribucije. Korištenje parametarskog $t$-testa na ovakvim podacima bila bi metodološka pogreška, što dokazuje da je u nastavku rada nužno primijeniti neparametarski Wilcoxon test.
 
 ## Homogenost varijanci
 
@@ -274,7 +284,7 @@ if (levene_p < 0.05) {
       "— Varijance su HOMOGENE (p >= 0.05). Pretpostavka jednakih varijanci nije narušena.\n")
 }
 ```
-
+Leveneov test daje $p = 0.5163$, što je znatno veće od $0.05$, čime se ne odbacuje pretpostavka o homogenosti varijanci. To znači da dobne skupine imaju podjednaku raspršenost (varijancu) broja udaraca, pa ta pretpostavka nije narušena.
 ---
 
 # Statisticki testovi i regresija
@@ -316,6 +326,8 @@ if (wilcox_res$p.value < 0.001) {
 }
 ```
 
+Wilcoxon test pokazuje da mlađi i stariji borci se zapravo statistički razlikuju u broju udaraca ($p = 0.00027$). No, kad pogledamo veličinu efekta ($r = 0.033$), ona je praktički nikakva – što znači da je ta razlika ispala "značajna" samo zato što imamo ogroman uzorak od skoro 12 tisuća borbi, dok u stvarnom svijetu godine borca ne igraju neku ulogu u tome koliko će on udaraca bacati.
+
 ## Logisticka regresija
 
 ```{r logisticka-regresija}
@@ -323,6 +335,11 @@ glm_model <- glm(is_winner ~ age * weight_cat + strikes,
                  data = ufc_clean, family = binomial)
 summary(glm_model)
 ```
+Logistička regresija potvrđuje da svi ovi faktori igraju ulogu, pa odbacujemo nultu hipotezu. 
+
+Udarci su ključni: Što više značajnih udaraca zadamo, šanse za pobjedu rastu. To je uvjerljivo najvažniji faktor u modelu.
+Godine imaju negativni utjecaj:  Sa svakom godinom starosti šanse za pobjedu borca lagano opadaju, što znači da je mladost u UFC-u definitivno prednost.
+Lakše kategorije brže propadaju: Negativna interakcija nam govori da starenje puno jače i brže pogađa borce u lakšim kategorijama nego teškaše. Kod lakših boraca brzina i refleksi prvi odlaze s godinama, dok teškaši mogu dulje opstati na čistu snagu i jedan jak udarac.
 
 ### Provjera multikolinearnosti (VIF)
 
@@ -341,6 +358,7 @@ if (all(vif_vals < 5)) {
   cat("-> Umjerena multikolinearnost (VIF 5-10): interpretirati s oprezom.\n")
 }
 ```
+Sve VIF vrijednosti su nam praktički oko 1 (maksimalna je 1.04), što je daleko ispod one kritične granice od 5. To znači da u modelu nema nikakve multikolinearnosti – dob, kategorija i udarci uopće ne utječu jedni na druge niti se preklapaju. Podaci su čisti pa možemo biti sigurni da svaki prediktor gledamo zasebno i bez greške.
 
 ### Cook-ova udaljenost — utjecajne opservacije
 
@@ -366,6 +384,7 @@ ggplot(cook_df, aes(x = index, y = cook)) +
        x = "Indeks opservacije", y = "Cook-ova udaljenost", color = "Opservacija") +
   theme_minimal()
 ```
+Izračunali smo Cookovu udaljenost da vidimo imamo li u bazi neke ekstremne točke koje nam previše krive regresijski model. Prag nam je ispao jako nizak ($0.00034$) jer imamo ogroman broj redaka, pa je zato sustav označio 215 borbi (oko $1.8\%$ cijelog uzorka) kao "utjecajne". S obzirom na to da je taj postotak stvarno minimalan (ispod $2\%$), nema potrebe da išta izbacujemo iz baze niti ti podaci kvare model, tako da možemo normalno nastaviti s radom
 
 ### Odds Ratios i interpretacija
 
@@ -390,6 +409,19 @@ print(exp(coef(glm_model)) %>% round(4))
 ```
 
 ---
+Intercept (OR = 1.8900): Ovo je teoretska početna točka modela. 
+Označava šanse za pobjedu borca koji ima 0 godina, 0 zadanih udaraca i nalazi se u teškoj kategoriji. 
+Pošto borac od 0 godina ne postoji, ovaj broj nam služi samo kao matematička konstanta za izračun modela i nema smisla u stvarnom životu.
+
+age (OR = 0.9608): Svaka dodatna godina života smanjuje šanse za pobjedu za oko 3.9% ($1 - 0.9608$), uz pretpostavku da su ostale varijable nepromijenjene. Ovo je čisti dokaz da biologija radi svoje i da mlađi borci u prosjeku imaju statističku prednost.
+
+weight_catLight (OR = 2.0253): Kada uspoređujemo borce s istim brojem godina i udaraca, oni u lakšoj kategoriji imaju čak dva puta veće šanse za pobjedu u odnosu na teškaše u bazi. To nam govori da je dinamika pobjeđivanja drukčija u lakšim divizijama.
+
+strikes (OR = 1.0183): Svaki jedan dodatni značajni udarac koji borac zada povećava njegove šanse za pobjedu za 1.83%. Iako postotak izgleda malen, u UFC-u se zadaju deseci udaraca po rundi, pa se ta prednost bolesno brzo zbraja i akumulira.
+
+age:weight_catLight (OR = 0.9695): Ovo je efekt interakcije i on nam je ključan. Pošto je manji od 1, on nam potvrđuje da starenje dodatno ruši šanse za pobjedu za oko 3% po godini ako si borac u lakšoj kategoriji. 
+
+Ukratko: s godinama svi borci padaju, ali lakšaši propadaju znatno brže jer u lakim kategorijama brzina i refleksi diktiraju sve, dok teškaši mogu proći na čistu snagu i u kasnijim godinama
 
 # Vizualizacije — dob, metoda, tezinska kategorija
 
@@ -423,7 +455,10 @@ age_effect_dir <- ifelse(or_age < 1, "opada", "raste")
 cat("\n[VIZUALIZACIJA] Logistička krivulja pokazuje da vjerojatnost pobjede", age_effect_dir,
     "s dobi. Histogram udjela metoda vizualizira taktičke pomake kroz karijeru boraca.\n")
 ```
+Vjerojatnost pobjede pada s godinama za sve, ali plava linija (lakša kategorija) pada puno strmije od crvene (teškaši).
+Dok smo mlađi od 25, lakša kategorija ima čak i veće šanse za pobjedu. Međutim, starenje puno brže "ubija" lakše borce. Oko 40. godine šanse za pobjedu lakših boraca padaju na samo 30%, dok teškaši istih godina prolaze puno bolje jer u teškoj diviziji starenje sporije utječe na rezultate.
 
+Kod mlađih boraca ima najviše partera i gušenja (plavo). U srednjim godinama dominiraju odluke sudaca (žuto), dok kod veterana od 40+ godina odjednom drastično skače udio nokauta (crveno). Borci u dvadesetima najviše koriste grappling i submissione jer imaju kondicije i fleksibilnosti. U tridesetima borbe postaju taktičke pa najčešće idu na bodove. Najstariji borci (40+) imaju ogroman udio KO/TKO završetaka – ne zato što jače udaraju, nego zato što im refleksi i obrana popuštaju, pa mečevi puno lakše i brže završavaju "gašenjem svjetla".
 ---
 
 # Stablo odlucivanja
@@ -460,7 +495,15 @@ if (n_leaves <= 4) {
   cat(" Model je SLOZEN — postoji rizik od prenaučenosti. Razmotri veći cp parametar.\n")
 }
 ```
+Što se vidi: Stablo se dijeli samo na jednom mjestu, i to oko varijable strikes. Dob i težinska kategorija uopće nisu ušle u igru jer ih je algoritam odbacio kao manje važne.
 
+Što to znači: Model je izvukao "magičnu granicu" od 38 značajnih udaraca koja lomi meč:
+
+Ako borac zada manje od 38 udaraca, upada u crveni kvadrat (64% svih borbi) gdje je šansa za poraz 58%.
+
+Ako zada 38 ili više udaraca, ide u zeleni kvadrat (36% borbi) gdje šansa za pobjedu skače na 63%.
+
+U kavezu prolazi onaj tko više udara, dok godine i kategorija padaju u drugi plan
 ---
 
 # Evaluacija modela
@@ -482,18 +525,8 @@ if (acc >= 0.70) {
   cat(" — SLABA točnost. Razmotri promjenu varijabli ili parametara.\n")
 }
 
-# Kappa statistika
-kappa_val <- cm$overall["Kappa"]
-cat("\n[KAPPA] Cohen's Kappa =", round(kappa_val, 3))
-if (kappa_val > 0.6) {
-  cat(" — DOBRA suglasnost modela iznad slucajnog pogadanja.\n")
-} else if (kappa_val > 0.4) {
-  cat(" — UMJERENA suglasnost.\n")
-} else {
-  cat(" — SLABA suglasnost — model jedva nadrasta slučajno pogađanje.\n")
-}
 ```
-
+Model ima 59% accuracy što je zapravo zadovoljavajuće, ukoliko uzmemo u obzir široku lepezu raznih nepredvidivih faktora koji utječu na ishode borbe (npr. lucky punch)
 ## ROC krivulja i AUC
 
 ```{r roc-auc, fig.width=6, fig.height=5}
@@ -520,7 +553,7 @@ if (auc_val >= 0.80) {
   cat(" — SLABA sposobnost. Preporučuje se revizija modela.\n")
 }
 ```
-
+Roc krivulja ima AUC od 0.649 što je, kao i kod conf. matrice, zadovoljavajuće s obzirom na prirodu podataka.
 ---
 
 # Hipoteza: Razlikuju li se udarci pobjednika i gubitnika unutar dobnih skupina?
@@ -568,57 +601,10 @@ if (abs(diff_over) < abs(diff_under)) {
   cat("  -> Razlika je VECA ili JEDNAKA kod starijih boraca — hipoteza nije potvrđena deskriptivno.\n")
 }
 ```
+Očekivali smo da stariji borci pobjeđuju pametnije i s manje udaraca na račun iskustva, ali podaci pokazuju suprotno. Pobjednici u obje dobne skupine imaju puno više udaraca od gubitnika, s tim da je kod starijih (35+) ta razlika još izraženija.
 
-```{r wilcoxon-dobne-skupine}
-wilcox_under35 <- wilcox.test(strikes ~ is_winner,
-                               data = filter(ufc_clean, age_group == "Under_35"))
-wilcox_over35  <- wilcox.test(strikes ~ is_winner,
-                               data = filter(ufc_clean, age_group == "Over_35"))
+Kod mlađih boraca pobjednici imaju u prosjeku 13.6 udaraca više od gubitnika, dok kod veterana ta razlika skače na 16.2 udarca više. Zaključak je da s godinama iskustvo ne kompenzira kondiciju – ako si stariji i želiš pobjedu, moraš raditi i udarati još više nego mlađi.
 
-cat("Wilcoxon test (Under 35):\n"); print(wilcox_under35)
-cat("\nWilcoxon test (Over 35):\n"); print(wilcox_over35)
-
-n_under <- nrow(filter(ufc_clean, age_group == "Under_35"))
-n_over  <- nrow(filter(ufc_clean, age_group == "Over_35"))
-r_under <- abs(qnorm(wilcox_under35$p.value / 2)) / sqrt(n_under)
-r_over  <- abs(qnorm(wilcox_over35$p.value  / 2)) / sqrt(n_over)
-
-cat("\n[EFFECT SIZE — veličina efekta (r)]\n")
-cat("  Under_35: r =", round(r_under, 3), "->",
-    ifelse(r_under >= 0.5, "VELIKI", ifelse(r_under >= 0.3, "SREDNJI", "MALI")), "efekt\n")
-cat("  Over_35:  r =", round(r_over,  3), "->",
-    ifelse(r_over  >= 0.5, "VELIKI", ifelse(r_over  >= 0.3, "SREDNJI", "MALI")), "efekt\n")
-
-if (r_under > r_over) {
-  cat("  -> Efekt je MANJI u skupini Over_35 — konzistentno s hipotezom o kompenzaciji iskustva.\n")
-} else {
-  cat("  -> Efekt NIJE manji u skupini Over_35 — hipoteza o iskustvu nije potvrđena veličinom efekta.\n")
-}
-
-# Korekcija za visestruke usporedbe (Bonferroni)
-p_adjusted <- p.adjust(c(wilcox_under35$p.value, wilcox_over35$p.value), method = "bonferroni")
-cat("\n[BONFERRONI KOREKCIJA] Prilagođene p-vrijednosti:\n")
-cat("  Under_35:", round(p_adjusted[1], 4), "| Over_35:", round(p_adjusted[2], 4), "\n")
-
-cat("\n[UVJETNA INTERPRETACIJA HIPOTEZE]\n")
-sig_under <- wilcox_under35$p.value < 0.05
-sig_over  <- wilcox_over35$p.value  < 0.05
-
-if (sig_under && sig_over) {
-  cat("  Razlika u udarcima je SIGNIFIKANTNA u OBJE dobne skupine.\n")
-  if (r_under > r_over) {
-    cat("  Efekt je jači kod mlađih boraca. Hipoteza POTVRĐENA: iskustvo smanjuje prednost udaraca.\n")
-  } else {
-    cat("  Efekt nije manji kod starijih. Hipoteza NIJE potvrđena u dijelu o iskustvu.\n")
-  }
-} else if (sig_under && !sig_over) {
-  cat("  Razlika je signifikantna samo kod MLAĐIH boraca. Hipoteza DJELOMICNO POTVRĐENA.\n")
-} else if (!sig_under && sig_over) {
-  cat("  Razlika je signifikantna samo kod STARIJIH — neočekivan nalaz, suprotan hipotezi.\n")
-} else {
-  cat("  Razlika NIJE signifikantna ni u jednoj skupini — hipoteza ODBAČENA.\n")
-}
-```
 
 ---
 
@@ -645,6 +631,7 @@ ggplot(method_weight, aes(x = weight_cat, y = n, fill = method)) +
        x = "Tezinska kategorija", y = "Udio (%)", fill = "Metoda") +
   theme_minimal()
 ```
+Graf jasno potvrđuje našu hipotezu jer pokazuje da teškaši znatno češće pobjeđuju nokautom (KO/TKO), dok u lakšim kategorijama uvjerljivo dominiraju sudačke odluke na bodove. S druge strane, udio pobjeda završnicama na tlu (Submission) potpuno je jednak u obje skupine, što znači da grapplerske vještine ne ovise o kilaži boraca. Zaključno, težina boraca direktno diktira dinamiku borbe – teškaši se više oslanjaju na razornu snagu i rani prekid, dok lakšaši pobjede traže kroz kondiciju i taktičko nadmudrivanje kroz sve runde.
 
 ```{r chi-kvadrat}
 chisq_data <- ufc_clean %>%
@@ -681,7 +668,7 @@ if (chisq_res$p.value < 0.05) {
   cat("  -> NEMA statistički znacajne veze (p >= 0.05). Hipoteza ODBAČENA.\n")
 }
 ```
-
+Hi-kvadrat test je i matematički potvrdio da težinska kategorija itekako utječe na način pobjede ($X^2 = 104.3$, $p < 0.05$).Standardizirani reziduali potpuno potvrđuju našu hipotezu:Teškaši statistički značajno odskaču po broju nokauta (rezidual $9.75$).Lakšaši prekomjerno često pobjeđuju na sudačke odluke (rezidual $8.66$).Parter (Submission) je oko nule, što znači da gušenja i poluge u obje kategorije završavaju točno onako kako statistička šansa i predviđa, bez obzira na kilažu.
 ---
 
 # Analiza profila borca — K-means klasteriranje
@@ -766,6 +753,17 @@ if (abs(age_diff) > 3) {
 }
 ```
 
+Odabir 3 klastera: Pomoću Elbow metode uočili smo jasnu "prelomnu točku" na grafu (tzv. lakat) za $k = 3$, što znači da je podjela baze na tri profila boraca matematički najoptimalnija.
+Profili boraca i uspješnost: K-means algoritam je prema dobi i broju udaraca izolirao tri potpuno različite skupine u kavezu:
+
+Klaster 1 (Crveni – "Elitni udarači"): Borci u vrhuncu snage (prosjek 29.4 godine) koji brutalno puno udaraju (čak 81.4 udarca po meču). Ovaj profil je uvjerljivo najuspješniji s visokih 67.2% pobjeda.
+
+Klaster 3 (Zeleni – "Mladi defenzivci/grappleri"): Mlađi borci (prosjek 26.2 godine) s osjetno manje zadanih udaraca (22.8). Imaju solidan prolaz i drže se na oko 48.8% pobjeda.
+
+Klaster 2 (Plavi – "Veterani u padu"): Najstarija skupina boraca u bazi (prosjek 33.1 godina) koji također malo udaraju (22.8). Ovo je najgori profil u UFC-u s tek 41.5% pobjeda.
+
+Zaključak: Klasteriranje potvrđuje da kombinacija mladosti i ekstremnog volumena udaraca (Klaster 1) donosi uvjerljivo najviše pobjeda, dok stariji borci s malo udaraca (Klaster 2) statistički najlošije prolaze.
+
 ---
 
 # Sazetak nalaza i kriticni osvrt
@@ -797,5 +795,7 @@ Ova analiza ima nekoliko metodoloških ogranicenja koja treba uzeti u obzir pri 
 4. **Uzorak samo iz UFC-a** — zaključci ne vrijede za širu MMA populaciju (regional/amateur scene).
 
 5. **Klasteriranje bez vanjske validacije** — odabir k=3 baziran je na Elbow metodi, ali bez Silhouette score ili Gap statistike.
+
+6. **Nepredvidivost ishoda i kompleksnost sporta** — Različiti statistički testovi u ovom radu ponekad su dali neočekivane rezultate upravo zbog same, izrazito nepredvidive prirode MMA-a. UFC borba se može prelomiti u sekundi na bezbroj različitih načina - od klasičnog nokauta (KO/TKO), gušenja i poluga (Submission), pa sve do diskvalifikacija, sudačkih bodova ili prekida od strane liječnika. Zbog toliko puno skrivenih faktora i načina završetka, podatke je nemoguće potpuno ukalupiti u linearne modele, što objašnjava zašto u kavezu teorija i statistika često padaju u vodu.
 
 **Preporuke:** Buduće analize mogle bi ukljuciti mixed-effects modele (borci se ponavljaju u datasetu), survival analizu (koliko dugo borac ostaje u UFC-u), te dodatne prediktore poput broja prethodnih borbi i omjera pobjeda.
